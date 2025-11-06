@@ -35,7 +35,7 @@
 ```bash
 # 1. Перейдите в /opt и клонируйте репозиторий
 cd /opt
-git clone [https://github.com/yourusername/wg-dashboard.git](https://github.com/Twoia-Kotletochka/wg-dashboard-.git)
+git clone https://github.com/Twoia-Kotletochka/wg-dashboard-.git
 cd wg-dashboard
 
 # 2. Установите зависимости
