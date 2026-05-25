@@ -1,62 +1,57 @@
-# ⚙️ WireGuard Dashboard (Self-Hosted)
+# WireGuard Dashboard
 
-**WireGuard Dashboard** — лёгкая самодостаточная панель управления WireGuard-сервером на Node.js.  
-Без внешних баз данных, без Docker-зависимостей — только `wg`, `node`, и полный контроль над вашим VPN.
+Простая self-hosted панель для управления WireGuard-клиентами: создание, блокировка, удаление, выгрузка `.conf`, QR-коды и live-статистика.
 
----
-
-## 🚀 Возможности
-
-- 🔧 Добавление, удаление и блокировка клиентов  
-- 🔑 Генерация `.conf`-файлов и QR-кодов  
-- 📊 Отображение IP, трафика и времени последнего handshake  
-- 🔒 Поддержка **Pre-Shared Key (PSK)** для дополнительной безопасности  
-- ⚡ Обновление статистики в реальном времени (через Socket.IO)  
-- 🧱 IP-whitelist и Basic-Auth защита  
-- 🧾 Совместимо с любой существующей конфигурацией `wg0.conf`
+## Что умеет
+- Добавление/удаление клиентов.
+- Блокировка/разблокировка peer.
+- Скачивание клиентского `.conf`.
+- Генерация QR-кода для мобильного подключения.
+- Просмотр handshake/трафика в реальном времени.
 
 ---
 
-## 🧩 Требования
+## Быстрый старт (рекомендуется)
 
-Перед установкой убедитесь, что на сервере есть:
-
-| Компонент | Версия | Установка |
-|------------|---------|-----------|
-| **Node.js** | ≥ 18 | `apt install nodejs npm` |
-| **WireGuard** | ≥ 1.0 | `apt install wireguard` |
-| **qrencode** | — | `apt install qrencode` |
-| **pm2** *(опционально)* | — | `npm install -g pm2` |
-
----
-
-## ⚙️ Установка
+### 1) Подготовьте сервер (WireGuard + системные настройки)
 
 ```bash
-# 1. Перейдите в /opt и клонируйте репозиторий
 cd /opt
-git clone https://github.com/Twoia-Kotletochka/wg-dashboard-.git
+git clone https://github.com/Twoia-Kotletochka/wg-dashboard-.git wg-dashboard
 cd wg-dashboard
 
-# 2. Установите зависимости
-npm install
+# Если WAN интерфейс не определяется автоматически, укажите вручную:
+# sudo WAN_IF=eth0 WG_IF=wg0 WG_NET=10.0.70.0/24 bash scripts/preinstall-wg.sh
+sudo bash scripts/preinstall-wg.sh
+```
 
-# 3. Настройте окружение
+Скрипт `scripts/preinstall-wg.sh`:
+- ставит `wireguard`, `qrencode`, `curl`, `git`;
+- проверяет наличие `node`/`npm` и ставит их только при необходимости;
+- включает `net.ipv4.ip_forward=1`;
+- добавляет NAT (MASQUERADE) для сети WG;
+- включает автозапуск `wg-quick@wg0`.
+
+### 2) Установите зависимости панели
+
+```bash
+npm install
+```
+
+### 3) Настройте `.env` (файл теперь есть в репозитории)
+
+```bash
 cp .env.example .env
 nano .env
+```
 
-# 4. Запуск панели
-node server.js
-# или через PM2:
-pm2 start server.js --name wg-dashboard
+Файл `.env.example` уже содержит рабочий шаблон. Минимальный пример:
 
-
-🔧 Пример .env
-
+```env
 WG_IF=wg0
 WG_CONF=/etc/wireguard/wg0.conf
-WG_SERVER_PUB=<публичный_ключ_сервера>
-WG_ENDPOINT=<ваш_сервер>:51820
+WG_SERVER_PUB=<PUBLIC_KEY_СЕРВЕРА>
+WG_ENDPOINT=<IP_ИЛИ_ДОМЕН>:51820
 WG_DNS=1.1.1.1,8.8.8.8
 WG_NET=10.0.70.0/24
 
@@ -64,47 +59,37 @@ PORT=54763
 ADMIN_USER=admin
 ADMIN_PASS=StrongPassword123
 
-🔐 Безопасность
+# Необязательно: белый список внешних IP
+ALLOWED_IPS=203.0.113.10,198.51.100.7
+```
 
-Панель по умолчанию защищена:
+### 4) Запуск
 
-Basic-Auth — логин/пароль из .env
+```bash
+node server.js
+```
 
-IP-фильтрация — разрешены только локальные и VPN-адреса
+Откройте: `http://<server-ip>:54763`
 
-// server.js
-app.use((req, res, next) => {
-  const allowed = [
-    '127.0.0.1', '::1',         // localhost
-    '10.0.70.',                 // весь VPN диапазон
-    '<твой_ип>'
-  ];
+---
 
-  const ip = req.ip.replace('::ffff:', '');
-  if (!allowed.some(a => ip.startsWith(a))) {
-    console.warn(`🚫 Access denied from ${ip}`);
-    return res.status(403).send('Forbidden');
-  }
-  next();
-});
+## Запуск как сервис (pm2)
 
-🧩 Пример конфигурации сервера
-[Interface]
-Address = 10.0.70.1/24
-ListenPort = 51820
-PrivateKey = <server_private_key>
-
-# Разрешаем маршрутизацию и NAT
-PostUp = sysctl -w net.ipv4.ip_forward=1
-PostDown = sysctl -w net.ipv4.ip_forward=0
-PostUp = iptables -t nat -A POSTROUTING -s 10.0.70.0/24 -o eth0 -j MASQUERADE
-PostDown = iptables -t nat -D POSTROUTING -s 10.0.70.0/24 -o eth0 -j MASQUERADE
-PostUp = iptables -A FORWARD -i wg0 -j ACCEPT
-PostUp = iptables -A FORWARD -o wg0 -j ACCEPT
-PostDown = iptables -D FORWARD -i wg0 -j ACCEPT
-PostDown = iptables -D FORWARD -o wg0 -j ACCEPT
-
-🛠 Автозапуск через PM2
-pm2 startup
+```bash
+sudo npm i -g pm2
+pm2 start server.js --name wg-dashboard
 pm2 save
-pm2 restart wg-dashboard
+pm2 startup
+```
+
+---
+
+## Важные замечания
+
+1. Перед запуском панели должен существовать и работать `/etc/wireguard/wg0.conf` (или ваш `WG_IF`).
+2. Панель использует Basic Auth (`ADMIN_USER/ADMIN_PASS`).
+3. Доступ к API ограничен localhost, подсетью `WG_NET` и IP из `ALLOWED_IPS`.
+4. Для генерации QR требуется `qrencode`.
+
+
+> Примечание: если у вас Node.js из NodeSource, `npm` часто уже встроен. Скрипт не форсирует `apt install npm`, чтобы избежать конфликта `nodejs Conflicts: npm`.
