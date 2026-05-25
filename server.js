@@ -31,9 +31,9 @@ const io = new Server(server, { cors: { origin: '*' } });
 
 app.use((req, res, next) => {
   const allowedExact = new Set([
-    '127.0.0.1',        // localhost
-    '::1',              // IPv6 localhost
-    'you_ip*',
+    '127.0.0.1',
+    '::1',
+    ...(process.env.ALLOWED_IPS || '').split(',').map(s => s.trim()).filter(Boolean),
   ]);
 
   // реальный IP клиента
@@ -44,10 +44,8 @@ app.use((req, res, next) => {
   // Разрешаем:
   // 1. точные IP из списка
   // 2. все адреса 10.0.70.0/24 (VPN)
-  if (
-    allowedExact.has(ip) ||
-    ip.startsWith('10.0.70.')
-  ) {
+  const wgPrefix = WG_NET.split('/')[0].split('.').slice(0, 3).join('.') + '.';
+  if (allowedExact.has(ip) || ip.startsWith(wgPrefix)) {
     return next();
   }
 
@@ -61,7 +59,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 
 // --- Хранилище ---
-const BASE_DIR = '/opt/wg-dashboard';
+const BASE_DIR = process.env.BASE_DIR || __dirname;
 const DATA_DIR = path.resolve(BASE_DIR, 'data');
 const PEERS_JSON = path.resolve(DATA_DIR, 'peers.json');
 const CLIENTS_DIR = path.resolve(DATA_DIR, 'clients');
