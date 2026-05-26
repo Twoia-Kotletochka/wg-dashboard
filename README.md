@@ -52,6 +52,19 @@ sudo bash scripts/preinstall-wg.sh
 sudo WAN_IF=eth0 WG_IF=wg0 WG_NET=10.0.70.0/24 bash scripts/preinstall-wg.sh
 ```
 
+Скрипт делает полный базовый bootstrap WireGuard:
+
+- устанавливает `wireguard`, `qrencode`, `iptables`, `iproute2`, `curl`, `git`;
+- генерирует server private/public key, если ключей ещё нет;
+- создаёт `/etc/wireguard/wg0.conf`, если конфига ещё нет;
+- добавляет `PostUp`/`PostDown` NAT в WireGuard config;
+- включает IPv4 forwarding;
+- включает автозапуск и сразу запускает `wg-quick@wg0`;
+- проверяет, что интерфейс реально появился через `wg show wg0`;
+- выводит готовые значения `WG_SERVER_PUB`, `WG_CONF`, `WG_ENDPOINT` и `WG_NET` для `.env`.
+
+Если `/etc/wireguard/wg0.conf` уже существует, скрипт не перезаписывает его. В этом случае проверьте, что в конфиге есть `PostUp`/`PostDown` для NAT.
+
 Установите зависимости и создайте `.env`:
 
 ```bash
@@ -67,7 +80,7 @@ nano .env
 ```env
 WG_IF=wg0
 WG_CONF=/etc/wireguard/wg0.conf
-WG_SERVER_PUB=<PUBLIC_KEY_СЕРВЕРА>
+WG_SERVER_PUB=<PUBLIC_KEY_ИЗ_ВЫВОДА_PREINSTALL>
 WG_ENDPOINT=<IP_ИЛИ_ДОМЕН>:51820
 WG_DNS=1.1.1.1,8.8.8.8
 WG_NET=10.0.70.0/24
@@ -91,7 +104,7 @@ cp .env.example .env
 | --- | --- |
 | `WG_IF` | Имя WireGuard-интерфейса, обычно `wg0`. |
 | `WG_CONF` | Путь к конфигу WireGuard, обычно `/etc/wireguard/wg0.conf`. |
-| `WG_SERVER_PUB` | Public key WireGuard-сервера для клиентских конфигов. |
+| `WG_SERVER_PUB` | Public key WireGuard-сервера для клиентских конфигов. Скрипт `scripts/preinstall-wg.sh` выводит это значение после генерации ключей. |
 | `WG_ENDPOINT` | Публичный адрес сервера в формате `host:port`. |
 | `WG_DNS` | DNS-серверы, которые будут прописаны клиентам. |
 | `WG_NET` | VPN-подсеть, из которой выдаются IP клиентов. |
