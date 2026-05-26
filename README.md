@@ -13,11 +13,11 @@
 
 ## Быстрый старт (рекомендуется)
 
-### 1) Подготовьте сервер (WireGuard + системные настройки)
+### 1) Подготовьте сервер (WireGuard + системные настройки, включая Node/npm)
 
 ```bash
 cd /opt
-git clone https://github.com/Twoia-Kotletochka/wg-dashboard-.git wg-dashboard
+git clone https://github.com/Twoia-Kotletochka/wg-dashboard.git wg-dashboard
 cd wg-dashboard
 
 # Если WAN интерфейс не определяется автоматически, укажите вручную:
@@ -26,7 +26,8 @@ sudo bash scripts/preinstall-wg.sh
 ```
 
 Скрипт `scripts/preinstall-wg.sh`:
-- ставит `wireguard`, `qrencode`, `nodejs`, `npm`;
+- ставит `wireguard`, `qrencode`, `curl`, `git`;
+- проверяет наличие `node`/`npm` и ставит их только при необходимости;
 - включает `net.ipv4.ip_forward=1`;
 - добавляет NAT (MASQUERADE) для сети WG;
 - включает автозапуск `wg-quick@wg0`.
@@ -37,14 +38,14 @@ sudo bash scripts/preinstall-wg.sh
 npm install
 ```
 
-### 3) Настройте `.env`
+### 3) Настройте `.env` (файл теперь есть в репозитории)
 
 ```bash
 cp .env.example .env
 nano .env
 ```
 
-Минимальный пример:
+Файл `.env.example` уже содержит рабочий шаблон. Минимальный пример:
 
 ```env
 WG_IF=wg0
@@ -89,3 +90,6 @@ pm2 startup
 2. Панель использует Basic Auth (`ADMIN_USER/ADMIN_PASS`).
 3. Доступ к API ограничен localhost, подсетью `WG_NET` и IP из `ALLOWED_IPS`.
 4. Для генерации QR требуется `qrencode`.
+
+
+> Примечание: если у вас Node.js из NodeSource, `npm` обычно уже есть. Скрипт сначала проверяет `node`/`npm` и только потом пытается доустановить недостающее, чтобы избежать конфликта `nodejs Conflicts: npm`.

@@ -8,16 +8,36 @@ fi
 
 WG_IF="${WG_IF:-wg0}"
 WG_NET="${WG_NET:-10.0.70.0/24}"
-WAN_IF="${WAN_IF:-$(ip route show default 2>/dev/null | awk '/default/ {print $5; exit}') }"
+WAN_IF="${WAN_IF:-$(ip route show default 2>/dev/null | awk '/default/ {print $5; exit}')}"
 
 if [[ -z "${WAN_IF}" ]]; then
   echo "[!] Не удалось определить WAN интерфейс. Укажите вручную: WAN_IF=eth0 bash $0" >&2
   exit 1
 fi
 
-echo "[+] Установка пакетов: wireguard, qrencode, curl, git, nodejs, npm"
+echo "[+] Обновляем индексы пакетов"
 apt-get update
-apt-get install -y wireguard qrencode curl git nodejs npm
+
+echo "[+] Установка пакетов: wireguard, qrencode, curl, git"
+apt-get install -y wireguard qrencode curl git
+
+if command -v node >/dev/null 2>&1; then
+  echo "[+] Node.js уже установлен: $(node --version)"
+else
+  echo "[+] Установка Node.js из системного репозитория"
+  apt-get install -y nodejs
+fi
+
+if command -v npm >/dev/null 2>&1; then
+  echo "[+] npm уже установлен: $(npm --version)"
+else
+  echo "[+] npm не найден, пробуем установить отдельно"
+  apt-get install -y npm || {
+    echo "[!] Не удалось установить npm через apt (возможен конфликт с NodeSource nodejs)." >&2
+    echo "[!] Установите npm совместимым способом для вашей Node.js-сборки и повторите запуск панели." >&2
+    exit 1
+  }
+fi
 
 echo "[+] Включаем IPv4 forwarding"
 cat >/etc/sysctl.d/99-wireguard-forward.conf <<SYSCTL
