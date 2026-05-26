@@ -85,6 +85,8 @@ WG_ENDPOINT=<IP_ИЛИ_ДОМЕН>:51820
 WG_DNS=1.1.1.1,8.8.8.8
 WG_NET=10.0.70.0/24
 PORT=54763
+HOST=127.0.0.1
+PUBLIC_URL=https://vpn.example.com/wg-easy
 AUTO_START_WG=true
 ADMIN_USER=admin
 ADMIN_PASS=StrongPassword123
@@ -109,6 +111,9 @@ cp .env.example .env
 | `WG_DNS` | DNS-серверы, которые будут прописаны клиентам. |
 | `WG_NET` | VPN-подсеть, из которой выдаются IP клиентов. |
 | `PORT` | HTTP-порт веб-панели. |
+| `HOST` | IP, на котором слушает Node.js. Для nginx используйте `127.0.0.1`, чтобы порт не был открыт напрямую наружу. |
+| `PUBLIC_URL` | Внешний адрес панели, например `https://vpn.example.com/wg-easy`. Путь из URL используется для assets, API и Socket.IO. |
+| `PUBLIC_BASE_PATH` | Явный путь публикации, например `/wg-easy`. Обычно не нужен, если заполнен `PUBLIC_URL`. |
 | `AUTO_START_WG` | `true` поднимает WireGuard при старте приложения, `false` удобно для локальной разработки. |
 | `ADMIN_USER` / `ADMIN_PASS` | Логин и пароль для входа в панель. |
 | `ALLOWED_IPS` | Дополнительные разрешённые IP или CIDR через запятую. |
@@ -140,10 +145,10 @@ npm start
 После запуска откройте:
 
 ```text
-http://<server-ip>:54763
+https://vpn.example.com/wg-easy
 ```
 
-В production не открывайте панель по обычному HTTP в публичный интернет. Basic Auth передаёт логин и пароль в заголовке каждого запроса, поэтому перед приложением должен быть HTTPS reverse proxy или доступ должен быть ограничен приватной сетью/VPN.
+В production Node.js должен слушать только `127.0.0.1`, а внешний доступ должен идти через HTTPS reverse proxy. Для этого оставьте `HOST=127.0.0.1` и укажите внешний адрес в `PUBLIC_URL`, например `https://vpn.example.com/wg-easy`.
 
 ## Деплой через pm2
 
@@ -164,7 +169,15 @@ pm2 restart wg-dashboard
 
 `pm2 restart` перезапускает только веб-панель. Кнопка "Перезапустить WG" внутри панели выполняет `wg-quick down` и `wg-quick up`, поэтому временно обрывает активные WireGuard-соединения.
 
-## HTTPS через nginx
+## HTTPS через nginx и путь `/wg-easy`
+
+Пример `.env` для панели на `https://vpn.example.com/wg-easy`:
+
+```env
+HOST=127.0.0.1
+PORT=54763
+PUBLIC_URL=https://vpn.example.com/wg-easy
+```
 
 Минимальный пример reverse proxy:
 
@@ -176,7 +189,11 @@ server {
     ssl_certificate /etc/letsencrypt/live/vpn.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/vpn.example.com/privkey.pem;
 
-    location / {
+    location = /wg-easy {
+        return 308 /wg-easy/;
+    }
+
+    location /wg-easy/ {
         proxy_pass http://127.0.0.1:54763;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -188,7 +205,7 @@ server {
 }
 ```
 
-Если nginx находится перед панелью, добавьте IP reverse proxy или свою админскую сеть в `ALLOWED_IPS`, иначе middleware может вернуть `Forbidden`.
+При такой схеме порт `54763` не должен быть открыт во внешний интернет. Nginx ходит к Node.js локально, поэтому пустой `ALLOWED_IPS` уже пропускает запросы от `127.0.0.1`. Если вы всё же слушаете на `0.0.0.0` и открываете порт напрямую, для доступа с любых IPv4 нужно `ALLOWED_IPS=0.0.0.0/0`, но это хуже для production.
 
 ## Как пользоваться
 

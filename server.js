@@ -22,8 +22,11 @@ const storage = createStorage(config.baseDir);
 const wg = createWireGuard(config);
 
 const app = express();
+const routes = express.Router();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+  path: config.publicBasePath ? `${config.publicBasePath}/socket.io` : '/socket.io',
+});
 const runMutation = createSerialQueue();
 
 function isSecureRequest(req) {
@@ -42,7 +45,7 @@ function sessionCookie(req, token, maxAge) {
   return serializeCookie(SESSION_COOKIE, token, {
     httpOnly: true,
     maxAge,
-    path: '/',
+    path: config.publicBasePath || '/',
     sameSite: 'Strict',
     secure: isSecureRequest(req),
   });
@@ -183,23 +186,30 @@ function safeBroadcast(delayMs = 0) {
 
 app.use(securityHeaders);
 app.use(requireAllowedIp);
-app.use(express.json({ limit: '64kb' }));
-app.use(express.static(config.publicDir));
+if (config.publicBasePath) {
+  app.use((req, res, next) => {
+    if (req.path === config.publicBasePath) return res.redirect(308, `${config.publicBasePath}/`);
+    return next();
+  });
+}
 
-app.post('/api/logout', (req, res) => {
+routes.use(express.json({ limit: '64kb' }));
+routes.use(express.static(config.publicDir));
+
+routes.post('/api/logout', (req, res) => {
   clearSessionCookie(req, res);
   res.json({ ok: true });
 });
 
-app.get('/api/status', requireAuth, (_req, res) => {
+routes.get('/api/status', requireAuth, (_req, res) => {
   res.json({ iface: wg.status(), ifname: config.wgIf });
 });
 
-app.get('/api/peers', requireAuth, (_req, res) => {
+routes.get('/api/peers', requireAuth, (_req, res) => {
   res.json(peersWithStats());
 });
 
-app.post('/api/add', requireAuth, (req, res) => {
+routes.post('/api/add', requireAuth, (req, res) => {
   const name = String(req.body?.name || '').trim();
   try {
     wg.assertClientName(name);
@@ -251,7 +261,7 @@ app.post('/api/add', requireAuth, (req, res) => {
   });
 });
 
-app.post('/api/block', requireAuth, (req, res) => {
+routes.post('/api/block', requireAuth, (req, res) => {
   const pub = String(req.body?.pub || '').trim();
   if (!isPublicKey(pub)) return apiError(res, 400, 'bad_pub');
   return mutate(res, 'block_failed', () => {
@@ -268,7 +278,7 @@ app.post('/api/block', requireAuth, (req, res) => {
   });
 });
 
-app.post('/api/unblock', requireAuth, (req, res) => {
+routes.post('/api/unblock', requireAuth, (req, res) => {
   const pub = String(req.body?.pub || '').trim();
   if (!isPublicKey(pub)) return apiError(res, 400, 'bad_pub');
   return mutate(res, 'unblock_failed', () => {
@@ -285,7 +295,7 @@ app.post('/api/unblock', requireAuth, (req, res) => {
   });
 });
 
-app.post('/api/delete', requireAuth, (req, res) => {
+routes.post('/api/delete', requireAuth, (req, res) => {
   const pub = String(req.body?.pub || '').trim();
   if (!isPublicKey(pub)) return apiError(res, 400, 'bad_pub');
   return mutate(res, 'delete_failed', () => {
@@ -309,7 +319,7 @@ app.post('/api/delete', requireAuth, (req, res) => {
   });
 });
 
-app.get('/api/qr', requireAuth, (req, res) => {
+routes.get('/api/qr', requireAuth, (req, res) => {
   try {
     const pub = String(req.query?.pub || '').trim();
     if (!isPublicKey(pub)) return res.status(400).send('bad pub');
@@ -327,7 +337,7 @@ app.get('/api/qr', requireAuth, (req, res) => {
   }
 });
 
-app.get('/api/conf', requireAuth, (req, res) => {
+routes.get('/api/conf', requireAuth, (req, res) => {
   try {
     const pub = String(req.query?.pub || '').trim();
     if (!isPublicKey(pub)) return res.status(400).send('bad pub');
@@ -350,7 +360,7 @@ app.get('/api/conf', requireAuth, (req, res) => {
   }
 });
 
-app.post('/api/restart', requireAuth, (_req, res) => {
+routes.post('/api/restart', requireAuth, (_req, res) => {
   return mutate(res, 'restart_failed', () => {
     const out = wg.restart();
     res.json({ ok: true, out });
@@ -358,12 +368,14 @@ app.post('/api/restart', requireAuth, (_req, res) => {
   });
 });
 
-app.use((error, _req, res, next) => {
+routes.use((error, _req, res, next) => {
   if (error instanceof SyntaxError && error.status === 400 && 'body' in error) {
     return apiError(res, 400, 'invalid_json');
   }
   return next(error);
 });
+
+app.use(config.publicBasePath || '/', routes);
 
 const lastStat = new Map();
 function peersWithRates() {
@@ -415,8 +427,9 @@ setInterval(() => {
 wg.ensureStarted();
 
 if (require.main === module) {
-  server.listen(config.port, '0.0.0.0', () => {
-    console.log(`WG Panel listening on http://0.0.0.0:${config.port}`);
+  server.listen(config.port, config.host, () => {
+    const localPath = config.publicBasePath || '/';
+    console.log(`WG Panel listening on http://${config.host}:${config.port}${localPath}`);
   });
 }
 

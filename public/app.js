@@ -1,4 +1,14 @@
-const socket = io({ autoConnect: false });
+const appScript = document.currentScript ? new URL(document.currentScript.src) : new URL('app.js', window.location.href);
+const basePath = appScript.pathname.replace(/\/app\.js$/, '').replace(/\/$/, '');
+
+function appUrl(path) {
+  return `${basePath}/${String(path).replace(/^\/+/, '')}`;
+}
+
+const socket = io({
+  autoConnect: false,
+  path: appUrl('socket.io'),
+});
 
 const $status = document.getElementById('status');
 const $list = document.getElementById('list');
@@ -41,7 +51,7 @@ function headers(extra = {}) {
 }
 
 async function api(url, options = {}) {
-  const res = await fetch(url, {
+  const res = await fetch(appUrl(url), {
     ...options,
     credentials: 'same-origin',
     headers: headers(options.headers || {}),
@@ -205,7 +215,7 @@ async function refresh({ initial = false } = {}) {
 }
 
 async function downloadConfig(pub) {
-  const res = await fetch(`/api/conf?pub=${encodeURIComponent(pub)}`, {
+  const res = await fetch(appUrl(`/api/conf?pub=${encodeURIComponent(pub)}`), {
     credentials: 'same-origin',
     headers: headers(),
   });
@@ -227,7 +237,7 @@ async function downloadConfig(pub) {
 }
 
 async function showQr(pub) {
-  const res = await fetch(`/api/qr?pub=${encodeURIComponent(pub)}`, {
+  const res = await fetch(appUrl(`/api/qr?pub=${encodeURIComponent(pub)}`), {
     credentials: 'same-origin',
     headers: headers(),
   });
@@ -318,7 +328,7 @@ $search.addEventListener('input', () => render(peersCache));
 $logout.addEventListener('click', async () => {
   setBusy($logout, true, 'Выйти');
   try {
-    const res = await fetch('/api/logout', {
+    const res = await fetch(appUrl('/api/logout'), {
       credentials: 'same-origin',
       headers: headers(),
       method: 'POST',

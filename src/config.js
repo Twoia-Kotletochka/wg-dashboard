@@ -1,6 +1,7 @@
 const path = require('path');
 
 const DEFAULTS = Object.freeze({
+  HOST: '127.0.0.1',
   WG_IF: 'wg0',
   WG_CONF: '/etc/wireguard/wg0.conf',
   WG_DNS: '1.1.1.1,8.8.8.8',
@@ -8,6 +9,30 @@ const DEFAULTS = Object.freeze({
   PORT: 54763,
   AUTO_START_WG: true,
 });
+
+function normalizeBasePath(value) {
+  const raw = String(value || '').trim();
+  if (!raw || raw === '/') return '';
+
+  const pathValue = raw.startsWith('/') ? raw : `/${raw}`;
+  const normalized = pathValue.replace(/\/+$/, '');
+  if (!/^\/[A-Za-z0-9._~!$&'()*+,;=:@/-]*$/.test(normalized)) {
+    throw new Error(`Invalid PUBLIC_BASE_PATH: ${value}`);
+  }
+  if (normalized.includes('//')) throw new Error(`Invalid PUBLIC_BASE_PATH: ${value}`);
+  return normalized;
+}
+
+function publicUrlBasePath(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+
+  try {
+    return normalizeBasePath(new URL(raw).pathname);
+  } catch {
+    throw new Error(`Invalid PUBLIC_URL: ${value}`);
+  }
+}
 
 function splitCsv(value) {
   return String(value || '')
@@ -35,10 +60,15 @@ function parsePort(value) {
 function loadConfig(env = process.env, rootDir = path.resolve(__dirname, '..')) {
   const baseDir = path.resolve(rootDir, env.BASE_DIR || '.');
   const wgConf = env.WG_CONF || DEFAULTS.WG_CONF;
+  const publicUrl = String(env.PUBLIC_URL || '').trim();
+  const publicBasePath = normalizeBasePath(env.PUBLIC_BASE_PATH || publicUrlBasePath(publicUrl));
 
   return Object.freeze({
     rootDir,
     publicDir: path.join(rootDir, 'public'),
+    host: env.HOST || DEFAULTS.HOST,
+    publicUrl,
+    publicBasePath,
     wgIf: env.WG_IF || DEFAULTS.WG_IF,
     wgConf,
     wgServerPub: env.WG_SERVER_PUB || '',
@@ -57,6 +87,8 @@ function loadConfig(env = process.env, rootDir = path.resolve(__dirname, '..')) 
 module.exports = {
   DEFAULTS,
   loadConfig,
+  normalizeBasePath,
+  publicUrlBasePath,
   parseBoolean,
   splitCsv,
 };

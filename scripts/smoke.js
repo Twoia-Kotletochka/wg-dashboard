@@ -43,6 +43,7 @@ async function main() {
     env: {
       ...process.env,
       AUTO_START_WG: 'false',
+      PUBLIC_BASE_PATH: '/wg-easy',
       PORT: String(port),
       BASE_DIR: baseDir,
       ADMIN_USER: 'test',
@@ -59,7 +60,7 @@ async function main() {
   child.stderr.on('data', (chunk) => { output += chunk; });
 
   try {
-    const baseUrl = `http://127.0.0.1:${port}`;
+    const baseUrl = `http://127.0.0.1:${port}/wg-easy`;
     const index = await waitFor(baseUrl);
     if (index.headers.get('x-frame-options') !== 'DENY') {
       throw new Error('Missing X-Frame-Options security header');
