@@ -9,6 +9,7 @@
 - Блокировка, разблокировка и удаление клиентов.
 - Live-статистика по handshake, трафику и скорости.
 - Защита панели через Basic Auth.
+- Автовход после перезагрузки страницы через `HttpOnly` session cookie без хранения пароля в `sessionStorage`.
 - Ограничение доступа по IP: localhost, VPN-сеть и дополнительные IP/CIDR из `ALLOWED_IPS`.
 - Хранение runtime-данных вне git: `data/peers.json` и `data/clients/*.conf`.
 
@@ -167,6 +168,7 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
     }
@@ -299,6 +301,8 @@ ALLOWED_IPS=203.0.113.10,192.168.1.0/24
 - Не открывайте панель на весь интернет без HTTPS и дополнительной сетевой защиты.
 - Ограничивайте доступ через `ALLOWED_IPS`, VPN или firewall.
 - Клиентские `.conf` содержат приватные ключи, поэтому храните их как секреты.
+- После успешного входа сервер ставит `HttpOnly` cookie для автологина; пароль не хранится в `localStorage` или `sessionStorage`.
+- Сессии хранятся в памяти процесса 12 часов. После перезапуска панели нужно войти снова.
 - Приложение добавляет базовые security headers: CSP, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`.
 
 ## Полезные команды

@@ -77,8 +77,19 @@ async function main() {
     const peers = await waitFor(`${baseUrl}/api/peers`, {
       headers: { Authorization: basic('test', 'test') },
     });
+    const sessionCookie = String(peers.headers.get('set-cookie') || '').split(';')[0];
+    if (!sessionCookie.startsWith('wg_dashboard_session=')) {
+      throw new Error('/api/peers did not set session cookie after Basic Auth');
+    }
+
     const json = await peers.json();
     if (!Array.isArray(json)) throw new Error('/api/peers did not return an array');
+
+    const statusWithCookie = await waitFor(`${baseUrl}/api/status`, {
+      headers: { Cookie: sessionCookie },
+    });
+    const statusJson = await statusWithCookie.json();
+    if (statusJson.ifname !== 'wg0') throw new Error('/api/status did not accept session cookie');
 
     const badConf = await fetch(`${baseUrl}/api/conf?pub=not-a-key`, {
       headers: { Authorization: basic('test', 'test') },
@@ -94,6 +105,20 @@ async function main() {
       body: JSON.stringify({ pub: 'not-a-key' }),
     });
     if (badPub.status !== 400) throw new Error(`/api/block bad pub returned ${badPub.status}`);
+
+    const logout = await fetch(`${baseUrl}/api/logout`, {
+      method: 'POST',
+      headers: { Cookie: sessionCookie },
+    });
+    if (!logout.ok) throw new Error(`/api/logout returned ${logout.status}`);
+    if (!String(logout.headers.get('set-cookie') || '').includes('Max-Age=0')) {
+      throw new Error('/api/logout did not clear session cookie');
+    }
+
+    const afterLogout = await fetch(`${baseUrl}/api/status`, {
+      headers: { Cookie: sessionCookie },
+    });
+    if (afterLogout.status !== 401) throw new Error(`/api/status after logout returned ${afterLogout.status}`);
 
     console.log(`Smoke OK: ${baseUrl}`);
   } finally {

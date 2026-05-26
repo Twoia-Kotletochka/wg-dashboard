@@ -34,13 +34,18 @@ function verifyBasicAuth(header, expectedUser, expectedPass) {
   );
 }
 
-function createAuthMiddleware(config) {
+function createAuthMiddleware(config, options = {}) {
   return function requireAuth(req, res, next) {
     if (!config.adminUser || !config.adminPass) {
       return res.status(403).send('Access disabled: set ADMIN_USER and ADMIN_PASS in .env');
     }
 
+    if (options.isSessionValid?.(req)) {
+      return next();
+    }
+
     if (verifyBasicAuth(req.headers.authorization || '', config.adminUser, config.adminPass)) {
+      options.onBasicAuthSuccess?.(req, res);
       return next();
     }
 

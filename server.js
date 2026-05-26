@@ -9,19 +9,63 @@ const { createAuthMiddleware, verifyBasicAuth } = require('./src/auth');
 const { loadConfig } = require('./src/config');
 const { createSerialQueue } = require('./src/mutation-queue');
 const { allowedIpMatches, normalizeIp, nextIpFromPeers, parseCidr } = require('./src/net');
+const { createSessionStore, parseCookies, serializeCookie } = require('./src/session');
 const { createStorage } = require('./src/storage');
 const { createWireGuard } = require('./src/wireguard');
 
+const SESSION_COOKIE = 'wg_dashboard_session';
+
 const config = loadConfig(process.env, __dirname);
 const wgNet = parseCidr(config.wgNet);
+const sessions = createSessionStore();
 const storage = createStorage(config.baseDir);
 const wg = createWireGuard(config);
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
-const requireAuth = createAuthMiddleware(config);
 const runMutation = createSerialQueue();
+
+function isSecureRequest(req) {
+  return req.secure || String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
+}
+
+function sessionTokenFromHeader(cookieHeader) {
+  return parseCookies(cookieHeader)[SESSION_COOKIE] || '';
+}
+
+function sessionTokenFromRequest(req) {
+  return sessionTokenFromHeader(req.headers.cookie);
+}
+
+function sessionCookie(req, token, maxAge) {
+  return serializeCookie(SESSION_COOKIE, token, {
+    httpOnly: true,
+    maxAge,
+    path: '/',
+    sameSite: 'Strict',
+    secure: isSecureRequest(req),
+  });
+}
+
+function issueSessionCookie(req, res) {
+  const session = sessions.create(config.adminUser);
+  res.setHeader('Set-Cookie', sessionCookie(req, session.token, Math.floor(sessions.ttlMs / 1000)));
+}
+
+function clearSessionCookie(req, res) {
+  sessions.destroy(sessionTokenFromRequest(req));
+  res.setHeader('Set-Cookie', sessionCookie(req, '', 0));
+}
+
+function isRequestSessionValid(req) {
+  return sessions.verify(sessionTokenFromRequest(req));
+}
+
+const requireAuth = createAuthMiddleware(config, {
+  isSessionValid: isRequestSessionValid,
+  onBasicAuthSuccess: issueSessionCookie,
+});
 
 function assertClientConfigReady() {
   if (!config.wgEndpoint) throw new Error('WG_ENDPOINT is required');
@@ -141,6 +185,11 @@ app.use(securityHeaders);
 app.use(requireAllowedIp);
 app.use(express.json({ limit: '64kb' }));
 app.use(express.static(config.publicDir));
+
+app.post('/api/logout', (req, res) => {
+  clearSessionCookie(req, res);
+  res.json({ ok: true });
+});
 
 app.get('/api/status', requireAuth, (_req, res) => {
   res.json({ iface: wg.status(), ifname: config.wgIf });
@@ -351,6 +400,7 @@ io.use((socket, next) => {
 
   const header = socket.handshake.auth?.authorization || socket.handshake.headers?.authorization || '';
   if (verifyBasicAuth(header, config.adminUser, config.adminPass)) return next();
+  if (sessions.verify(sessionTokenFromHeader(socket.handshake.headers?.cookie))) return next();
   return next(new Error('unauthorized'));
 });
 

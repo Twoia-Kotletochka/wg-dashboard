@@ -12,6 +12,7 @@ const $logout = document.getElementById('logout');
 const $notice = document.getElementById('notice');
 
 let authHeader = '';
+let sessionAuthenticated = false;
 let peersCache = [];
 let loginOverlay = null;
 
@@ -22,12 +23,13 @@ function setAuth(user, pass) {
 
 function clearAuth() {
   authHeader = '';
+  sessionAuthenticated = false;
   socket.disconnect();
 }
 
-function handleUnauthorized() {
+function handleUnauthorized(message = 'Нужна авторизация.') {
   clearAuth();
-  showLogin('Неверный логин или пароль.');
+  showLogin(message);
 }
 
 function headers(extra = {}) {
@@ -41,6 +43,7 @@ function headers(extra = {}) {
 async function api(url, options = {}) {
   const res = await fetch(url, {
     ...options,
+    credentials: 'same-origin',
     headers: headers(options.headers || {}),
   });
 
@@ -171,13 +174,12 @@ function render(peers) {
 }
 
 function connectSocket() {
-  if (!authHeader) return;
-  socket.auth = { authorization: authHeader };
+  if (!authHeader && !sessionAuthenticated) return;
+  socket.auth = authHeader ? { authorization: authHeader } : {};
   if (!socket.connected) socket.connect();
 }
 
-async function refresh() {
-  if (!authHeader) return showLogin();
+async function refresh({ initial = false } = {}) {
   setBusy($refresh, true, 'Обновить');
   try {
     const peers = await api('/api/peers');
@@ -185,9 +187,17 @@ async function refresh() {
     render(peersCache);
     const status = await api('/api/status');
     $status.textContent = status.iface || 'WireGuard status is empty.';
+    sessionAuthenticated = true;
+    connectSocket();
     clearNotice();
   } catch (error) {
-    if (error.message === 'unauthorized') return handleUnauthorized();
+    if (error.message === 'unauthorized') {
+      if (initial) {
+        clearAuth();
+        return showLogin();
+      }
+      return handleUnauthorized('Сессия истекла. Войдите снова.');
+    }
     showNotice(`Ошибка обновления: ${error.message}`);
   } finally {
     setBusy($refresh, false, 'Обновить');
@@ -195,7 +205,10 @@ async function refresh() {
 }
 
 async function downloadConfig(pub) {
-  const res = await fetch(`/api/conf?pub=${encodeURIComponent(pub)}`, { headers: headers() });
+  const res = await fetch(`/api/conf?pub=${encodeURIComponent(pub)}`, {
+    credentials: 'same-origin',
+    headers: headers(),
+  });
   if (res.status === 401) throw new Error('unauthorized');
   if (!res.ok) throw new Error(await res.text());
 
@@ -214,7 +227,10 @@ async function downloadConfig(pub) {
 }
 
 async function showQr(pub) {
-  const res = await fetch(`/api/qr?pub=${encodeURIComponent(pub)}`, { headers: headers() });
+  const res = await fetch(`/api/qr?pub=${encodeURIComponent(pub)}`, {
+    credentials: 'same-origin',
+    headers: headers(),
+  });
   if (res.status === 401) throw new Error('unauthorized');
   if (!res.ok) throw new Error(await res.text());
 
@@ -299,12 +315,25 @@ $restart.addEventListener('click', async () => {
   }
 });
 $search.addEventListener('input', () => render(peersCache));
-$logout.addEventListener('click', () => {
-  clearAuth();
-  peersCache = [];
-  render(peersCache);
-  $status.textContent = 'Статус появится после авторизации.';
-  showLogin();
+$logout.addEventListener('click', async () => {
+  setBusy($logout, true, 'Выйти');
+  try {
+    const res = await fetch('/api/logout', {
+      credentials: 'same-origin',
+      headers: headers(),
+      method: 'POST',
+    });
+    if (!res.ok) throw new Error(await res.text());
+    clearAuth();
+    peersCache = [];
+    render(peersCache);
+    $status.textContent = 'Статус появится после авторизации.';
+    showLogin();
+  } catch (error) {
+    showNotice(`Ошибка выхода: ${error.message}`);
+  } finally {
+    setBusy($logout, false, 'Выйти');
+  }
 });
 
 function showLogin(message = '') {
@@ -380,8 +409,8 @@ socket.on('peers', (peers) => {
   render(peersCache);
 });
 socket.on('connect_error', (error) => {
-  if (error.message === 'unauthorized') return handleUnauthorized();
+  if (error.message === 'unauthorized') return handleUnauthorized('Сессия истекла. Войдите снова.');
   if (error.message === 'forbidden') showNotice('Доступ к live-обновлениям запрещён для текущего IP.');
 });
 
-showLogin();
+refresh({ initial: true });
