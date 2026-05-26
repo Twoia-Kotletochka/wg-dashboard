@@ -16,7 +16,7 @@ const { createWireGuard } = require('./src/wireguard');
 const SESSION_COOKIE = 'wg_dashboard_session';
 
 const config = loadConfig(process.env, __dirname);
-const wgNet = parseCidr(config.wgNet);
+parseCidr(config.wgNet);
 const sessions = createSessionStore();
 const storage = createStorage(config.baseDir);
 const wg = createWireGuard(config);
@@ -132,7 +132,7 @@ function buildClientConfig({ privateKey, ip, presharedKey }) {
   assertClientConfigReady();
   return `[Interface]
 PrivateKey = ${privateKey}
-Address = ${ip}/${wgNet.prefix}
+Address = ${ip}/32
 DNS = ${config.wgDns}
 
 [Peer]
