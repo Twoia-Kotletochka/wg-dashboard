@@ -111,7 +111,7 @@ cp .env.example .env
 | `WG_DNS` | DNS-серверы, которые будут прописаны клиентам. |
 | `WG_NET` | VPN-подсеть, из которой выдаются IP клиентов. |
 | `PORT` | HTTP-порт веб-панели. |
-| `HOST` | IP, на котором слушает Node.js. Для nginx используйте `127.0.0.1`, чтобы порт не был открыт напрямую наружу. |
+| `HOST` | IP, на котором слушает Node.js. Для Caddy/nginx используйте `127.0.0.1`, чтобы порт не был открыт напрямую наружу. |
 | `PUBLIC_URL` | Внешний адрес панели, например `https://vpn.example.com/wg-easy`. Путь из URL используется для assets, API и Socket.IO. |
 | `PUBLIC_BASE_PATH` | Явный путь публикации, например `/wg-easy`. Обычно не нужен, если заполнен `PUBLIC_URL`. |
 | `AUTO_START_WG` | `true` поднимает WireGuard при старте приложения, `false` удобно для локальной разработки. |
@@ -149,6 +149,45 @@ https://vpn.example.com/wg-easy
 ```
 
 В production Node.js должен слушать только `127.0.0.1`, а внешний доступ должен идти через HTTPS reverse proxy. Для этого оставьте `HOST=127.0.0.1` и укажите внешний адрес в `PUBLIC_URL`, например `https://vpn.example.com/wg-easy`.
+
+## HTTPS через Caddy и путь `/wg-easy`
+
+Если на сервере уже запущен Caddy для другого сервиса, не поднимайте nginx на тех же `80/443`. Оставьте Caddy главным reverse proxy и добавьте отдельный маршрут для панели:
+
+```caddy
+your-subdomain.duckdns.org {
+    encode zstd gzip
+
+    @wg path /wg-easy /wg-easy/*
+    handle @wg {
+        reverse_proxy 127.0.0.1:54763
+    }
+
+    handle {
+        reverse_proxy 127.0.0.1:3000
+    }
+}
+```
+
+Пример `.env` для DuckDNS-домена:
+
+```env
+HOST=127.0.0.1
+PORT=54763
+PUBLIC_URL=https://your-subdomain.duckdns.org/wg-easy
+WG_ENDPOINT=your-subdomain.duckdns.org:51820
+```
+
+После изменения Caddyfile:
+
+```bash
+sudo caddy fmt --overwrite /etc/caddy/Caddyfile
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+sudo systemctl restart wg-dashboard
+```
+
+Порт Node.js `54763` не нужно открывать наружу. Caddy принимает HTTPS на `443` и ходит к панели локально через `127.0.0.1`.
 
 ## Деплой через pm2
 
