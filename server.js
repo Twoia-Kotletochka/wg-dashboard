@@ -138,7 +138,7 @@ DNS = ${config.wgDns}
 [Peer]
 PublicKey = ${config.wgServerPub}
 PresharedKey = ${presharedKey}
-AllowedIPs = 0.0.0.0/0
+AllowedIPs = 0.0.0.0/0, ::/0
 Endpoint = ${config.wgEndpoint}
 `;
 }
