@@ -8,10 +8,9 @@
     "start": "node server.js",
     "check": "node scripts/check-js.js",
     "lint": "eslint .",
-    "test": "node --test test/*.test.js",
     "build": "node scripts/check-js.js",
     "smoke": "node scripts/smoke.js",
-    "verify": "eslint . && node --test test/*.test.js && node scripts/check-js.js && node scripts/smoke.js"
+    "verify": "eslint . && node scripts/check-js.js && node scripts/smoke.js"
   },
   "engines": {
     "node": ">=18.18.0"

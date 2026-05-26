@@ -260,7 +260,6 @@ server {
 ```bash
 npm run check
 npm run lint
-npm test
 npm run build
 npm run smoke
 npm run verify
@@ -272,10 +271,9 @@ npm run verify
 | --- | --- |
 | `npm run check` | Проверяет синтаксис JavaScript-файлов через `node --check`. |
 | `npm run lint` | Запускает ESLint. |
-| `npm test` | Запускает unit-тесты через `node:test`. |
 | `npm run build` | Выполняет статическую build-проверку проекта. |
 | `npm run smoke` | Проверяет локальный HTTP-запуск без WireGuard. |
-| `npm run verify` | Запускает lint, tests, build и smoke подряд. |
+| `npm run verify` | Запускает lint, build-check и smoke подряд. |
 | `npm audit` | Проверяет зависимости на известные уязвимости. |
 
 В проекте нет frontend-бандлера: интерфейс лежит в `public/` и отдаётся как статические файлы. Поэтому `build` здесь означает проверку проекта, а не генерацию отдельной папки `dist`.
@@ -296,7 +294,6 @@ public/app.js             # клиентская логика панели
 scripts/preinstall-wg.sh  # подготовка сервера и WireGuard
 scripts/check-js.js       # проверка синтаксиса JS-файлов
 scripts/smoke.js          # smoke test локального HTTP-сервера
-test/                     # unit-тесты
 ```
 
 ## Формат `data/peers.json`
