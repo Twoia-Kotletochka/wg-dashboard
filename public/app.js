@@ -1,222 +1,402 @@
-// /opt/wg-dashboard/public/app.js
-const socket = io();
+const socket = io({ autoConnect: false });
 
 const $status = document.getElementById('status');
 const $list = document.getElementById('list');
+const $addForm = document.getElementById('add-form');
 const $add = document.getElementById('add');
 const $name = document.getElementById('name');
 const $refresh = document.getElementById('refresh');
 const $restart = document.getElementById('restart');
 const $search = document.getElementById('search');
+const $logout = document.getElementById('logout');
+const $notice = document.getElementById('notice');
 
 let authHeader = '';
+let peersCache = [];
+let loginOverlay = null;
 
 function setAuth(user, pass) {
-    authHeader = 'Basic ' + btoa(user + ':' + pass);
-    localStorage.setItem('WG_USER', user);
-    localStorage.setItem('WG_PASS', pass);
+  authHeader = `Basic ${btoa(`${user}:${pass}`)}`;
+  sessionStorage.setItem('WG_USER', user);
+  sessionStorage.setItem('WG_PASS', pass);
+  connectSocket();
 }
 
-function headers() {
-    const h = { 'Content-Type': 'application/json' };
-    if (authHeader) h['Authorization'] = authHeader;
-    return h;
+function clearAuth() {
+  authHeader = '';
+  sessionStorage.removeItem('WG_USER');
+  sessionStorage.removeItem('WG_PASS');
+  socket.disconnect();
 }
 
-async function api(path, opt = {}) {
-    const res = await fetch(path, { headers: headers(), ...opt });
-    if (res.status === 401) throw new Error('unauthorized');
-    if (!res.ok) throw new Error(await res.text());
-    const ct = res.headers.get('content-type') || '';
-    return ct.includes('application/json') ? res.json() : res.text();
+function handleUnauthorized() {
+  clearAuth();
+  showLogin('Неверный логин или пароль.');
 }
 
-function fmtBytes(n) {
-    if (n < 1024) return n + ' B';
-    const u = ['KB', 'MB', 'GB', 'TB']; let i = -1;
-    do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1);
-    return n.toFixed(2) + ' ' + u[i];
-}
-function fmtRate(bps) { return fmtBytes(bps) + '/s'; }
-
-let peersCache = [];
-
-function row(peer) {
-    const online = peer.online ? '🟢' : '🔴';
-    const blocked = peer.blocked
-        ? '<span class="pill bg-red-700">🚫 blocked</span>'
-        : '<span class="pill bg-green-700">active</span>';
-    const ep = peer.endpoint ? ` · ${peer.endpoint}` : '';
-    return `
-  <div class="bg-gray-800 p-3 rounded">
-    <div class="flex items-center justify-between">
-      <div>
-        <div class="font-semibold">
-          ${online} ${peer.name}
-          <span class="text-gray-400 text-xs">(${peer.ip})</span> ${blocked}
-        </div>
-        <div class="text-xs text-gray-400">
-          hs: ${peer.latest} ·
-          rx: ${fmtBytes(peer.rx)} (${fmtRate(peer.rxRate || 0)}) ·
-          tx: ${fmtBytes(peer.tx)} (${fmtRate(peer.txRate || 0)})${ep}
-        </div>
-      </div>
-      <div class="flex gap-2">
-            <button class="bg-gray-700 px-2 py-1 rounded" data-act="conf" data-pub="${peer.pub}">📄</button>
-            <button class="bg-gray-700 px-2 py-1 rounded" data-act="qr" data-pub="${peer.pub}">📱</button>
-        ${peer.blocked
-            ? `<button class="bg-green-700 px-2 py-1 rounded" data-act="unblock" data-pub="${peer.pub}">✅</button>`
-            : `<button class="bg-yellow-700 px-2 py-1 rounded" data-act="block" data-pub="${peer.pub}">🚫</button>`}
-        <button class="bg-red-700 px-2 py-1 rounded" data-act="delete" data-pub="${peer.pub}">🗑</button>
-      </div>
-    </div>
-  </div>`;
+function headers(extra = {}) {
+  return {
+    'Content-Type': 'application/json',
+    ...(authHeader ? { Authorization: authHeader } : {}),
+    ...extra,
+  };
 }
 
-const $logout = document.getElementById('logout');
-if ($logout) {
-    $logout.onclick = () => {
-        localStorage.removeItem('WG_USER');
-        localStorage.removeItem('WG_PASS');
-        alert('Вы вышли из панели');
-        location.reload();
-    };
+async function api(url, options = {}) {
+  const res = await fetch(url, {
+    ...options,
+    headers: headers(options.headers || {}),
+  });
+
+  if (res.status === 401) throw new Error('unauthorized');
+  if (!res.ok) {
+    const message = await res.text();
+    throw new Error(message || `${res.status} ${res.statusText}`);
+  }
+
+  const type = res.headers.get('content-type') || '';
+  return type.includes('application/json') ? res.json() : res.text();
+}
+
+function showNotice(message, type = 'error') {
+  $notice.textContent = message;
+  $notice.className = `notice notice-${type}`;
+  $notice.hidden = false;
+}
+
+function clearNotice() {
+  $notice.hidden = true;
+  $notice.textContent = '';
+}
+
+function setBusy(button, busy, label) {
+  button.disabled = busy;
+  if (label) button.textContent = busy ? 'Подождите...' : label;
+}
+
+function fmtBytes(value) {
+  let n = Number(value || 0);
+  if (n < 1024) return `${n} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let unit = -1;
+  do {
+    n /= 1024;
+    unit += 1;
+  } while (n >= 1024 && unit < units.length - 1);
+  return `${n.toFixed(2)} ${units[unit]}`;
+}
+
+function fmtRate(value) {
+  return `${fmtBytes(value)}/s`;
+}
+
+function appendText(parent, value) {
+  parent.appendChild(document.createTextNode(value));
+}
+
+function createButton({ action, pub, label, variant = 'secondary', title }) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = `button button-${variant}`;
+  button.dataset.act = action;
+  button.dataset.pub = pub;
+  button.textContent = label;
+  if (title) button.title = title;
+  return button;
+}
+
+function createPeerCard(peer) {
+  const card = document.createElement('article');
+  card.className = 'client-card';
+
+  const main = document.createElement('div');
+  main.className = 'client-main';
+
+  const title = document.createElement('div');
+  title.className = 'client-title';
+
+  const dot = document.createElement('span');
+  dot.className = peer.online ? 'status-dot status-dot-online' : 'status-dot';
+  dot.title = peer.online ? 'Онлайн' : 'Оффлайн';
+  title.appendChild(dot);
+  appendText(title, peer.name || 'unknown');
+
+  const ip = document.createElement('span');
+  ip.className = 'muted';
+  ip.textContent = `(${peer.ip || 'no-ip'})`;
+  title.appendChild(ip);
+
+  const badge = document.createElement('span');
+  badge.className = peer.blocked ? 'badge badge-blocked' : 'badge badge-active';
+  badge.textContent = peer.blocked ? 'blocked' : 'active';
+  title.appendChild(badge);
+
+  const meta = document.createElement('div');
+  meta.className = 'client-meta';
+  meta.textContent = [
+    `handshake: ${peer.latest || 'no handshake'}`,
+    `rx: ${fmtBytes(peer.rx)} (${fmtRate(peer.rxRate)})`,
+    `tx: ${fmtBytes(peer.tx)} (${fmtRate(peer.txRate)})`,
+    peer.endpoint ? `endpoint: ${peer.endpoint}` : '',
+  ].filter(Boolean).join(' | ');
+
+  main.appendChild(title);
+  main.appendChild(meta);
+
+  const actions = document.createElement('div');
+  actions.className = 'row-actions';
+  actions.appendChild(createButton({ action: 'conf', pub: peer.pub, label: 'Conf', title: 'Скачать конфиг' }));
+  actions.appendChild(createButton({ action: 'qr', pub: peer.pub, label: 'QR', title: 'Показать QR' }));
+  actions.appendChild(peer.blocked
+    ? createButton({ action: 'unblock', pub: peer.pub, label: 'Разблокировать', variant: 'primary' })
+    : createButton({ action: 'block', pub: peer.pub, label: 'Блокировать', variant: 'warning' }));
+  actions.appendChild(createButton({ action: 'delete', pub: peer.pub, label: 'Удалить', variant: 'danger' }));
+
+  card.appendChild(main);
+  card.appendChild(actions);
+  return card;
 }
 
 function render(peers) {
-    const q = ($search.value || '').trim().toLowerCase();
-    let filtered = peers;
-    if (q) filtered = peers.filter(p => (p.name + p.ip + p.endpoint).toLowerCase().includes(q));
-    filtered.sort((a, b) => (b.online - a.online) || a.name.localeCompare(b.name));
-    $list.innerHTML = filtered.length ? filtered.map(row).join('') : '<div class="text-gray-400">Клиентов нет</div>';
-    $list.querySelectorAll('button[data-act]').forEach(btn => {
-        btn.onclick = async () => {
-            const act = btn.dataset.act;
-            const pub = btn.dataset.pub;
+  const query = ($search.value || '').trim().toLowerCase();
+  const filtered = peers
+    .filter((peer) => {
+      const haystack = [peer.name, peer.ip, peer.endpoint].filter(Boolean).join(' ').toLowerCase();
+      return !query || haystack.includes(query);
+    })
+    .sort((a, b) => Number(b.online) - Number(a.online) || String(a.name).localeCompare(String(b.name)));
 
-            try {
-                if (act === 'delete' && !confirm('Удалить клиента?')) return;
+  $list.replaceChildren();
+  if (!filtered.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = peers.length ? 'По этому запросу клиентов нет.' : 'Клиентов пока нет.';
+    $list.appendChild(empty);
+    return;
+  }
 
-                if (act === 'conf') {
-                    // Скачиваем конфиг через fetch и берём имя из заголовка
-                    const res = await fetch(`/api/conf?pub=${encodeURIComponent(pub)}`, { headers: headers() });
-                    if (!res.ok) throw new Error('Ошибка загрузки');
-                    const blob = await res.blob();
-
-                    // Получаем имя файла из Content-Disposition (если сервер его отдал)
-                    let filename = 'client.conf';
-                    const cd = res.headers.get('Content-Disposition');
-                    if (cd && cd.includes('filename=')) {
-                        filename = cd.split('filename=')[1].replace(/["']/g, '');
-                        filename = decodeURIComponent(filename);
-                    }
-
-                    const a = document.createElement('a');
-                    a.href = URL.createObjectURL(blob);
-                    a.download = filename;
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                    return;
-                }
-
-                if (act === 'qr') {
-                    // получаем QR PNG и показываем прямо в модалке
-                    const res = await fetch(`/api/qr?pub=${encodeURIComponent(pub)}`, { headers: headers() });
-                    if (!res.ok) throw new Error('Ошибка QR');
-                    const blob = await res.blob();
-                    const url = URL.createObjectURL(blob);
-                    const overlay = document.createElement('div');
-                    overlay.className = 'fixed inset-0 bg-black bg-opacity-80 flex flex-col items-center justify-center';
-                    overlay.innerHTML = `
-          <div class="bg-gray-800 p-4 rounded text-center">
-            <h2 class="text-lg mb-3 font-semibold">📱 QR код клиента</h2>
-            <img src="${url}" class="mx-auto border-4 border-gray-700 rounded-lg" />
-            <button class="mt-4 bg-red-700 px-4 py-2 rounded">Закрыть</button>
-          </div>`;
-                    overlay.querySelector('button').onclick = () => overlay.remove();
-                    document.body.appendChild(overlay);
-                    return;
-                }
-
-                await api('/api/' + act, { method: 'POST', body: JSON.stringify({ pub }) });
-            } catch (e) {
-                if (e.message === 'unauthorized') return showLogin();
-                alert('Ошибка: ' + e.message);
-            }
-        };
-    });
+  filtered.forEach((peer) => $list.appendChild(createPeerCard(peer)));
 }
 
-socket.on('status', (s) => { $status.textContent = s.text; });
-socket.on('peers', (peers) => { peersCache = peers; render(peersCache); });
-
-$add.onclick = async () => {
-    const name = ($name.value || '').trim();
-    if (!name) return alert('Введите имя');
-    try {
-        await api('/api/add', { method: 'POST', body: JSON.stringify({ name }) });
-        $name.value = '';
-    } catch (e) {
-        if (e.message === 'unauthorized') return showLogin();
-        alert('Ошибка: ' + e.message);
-    }
-};
-
-$refresh.onclick = async () => {
-    try {
-        const ps = await api('/api/peers');
-        peersCache = ps; render(peersCache);
-        const s = await api('/api/status');
-        $status.textContent = s.iface;
-    } catch (e) {
-        if (e.message === 'unauthorized') return showLogin();
-        alert('Ошибка: ' + e.message);
-    }
-};
-
-$restart.onclick = async () => {
-    if (!confirm('Перезапустить интерфейс WireGuard?')) return;
-    try { await api('/api/restart', { method: 'POST' }); }
-    catch (e) {
-        if (e.message === 'unauthorized') return showLogin();
-        alert('Ошибка: ' + e.message);
-    }
-};
-
-$search.oninput = () => render(peersCache);
-
-// форма логина
-function showLogin() {
-    const overlay = document.createElement('div');
-    overlay.className = 'fixed inset-0 flex flex-col items-center justify-center backdrop-blur-md bg-black bg-opacity-100 transition';
-    overlay.innerHTML = `
-    <div class="bg-gray-900 bg-opacity-95 p-6 rounded-2xl shadow-lg border border-gray-700 w-80 space-y-3 text-center">
-      <h2 class="text-lg font-semibold">🔐 Авторизация</h2>
-      <input id="lg-user" class="w-full bg-gray-900 p-2 rounded" placeholder="Логин">
-      <input id="lg-pass" type="password" class="w-full bg-gray-900 p-2 rounded" placeholder="Пароль">
-      <button id="lg-ok" class="bg-green-700 px-4 py-2 rounded w-full">Войти</button>
-    </div>
-  `;
-    document.body.appendChild(overlay);
-    const $user = overlay.querySelector('#lg-user');
-    const $pass = overlay.querySelector('#lg-pass');
-    overlay.querySelector('#lg-ok').onclick = async () => {
-        const u = $user.value.trim();
-        const p = $pass.value.trim();
-        if (!u || !p) return alert('Введите логин и пароль');
-        setAuth(u, p);
-        document.body.removeChild(overlay);
-        $refresh.click();
-    };
+function connectSocket() {
+  if (!authHeader) return;
+  socket.auth = { authorization: authHeader };
+  if (!socket.connected) socket.connect();
 }
 
-// автоподключение, если логин сохранён
-const savedUser = localStorage.getItem('WG_USER');
-const savedPass = localStorage.getItem('WG_PASS');
+async function refresh() {
+  if (!authHeader) return showLogin();
+  setBusy($refresh, true, 'Обновить');
+  try {
+    const peers = await api('/api/peers');
+    peersCache = peers;
+    render(peersCache);
+    const status = await api('/api/status');
+    $status.textContent = status.iface || 'WireGuard status is empty.';
+    clearNotice();
+  } catch (error) {
+    if (error.message === 'unauthorized') return handleUnauthorized();
+    showNotice(`Ошибка обновления: ${error.message}`);
+  } finally {
+    setBusy($refresh, false, 'Обновить');
+  }
+}
+
+async function downloadConfig(pub) {
+  const res = await fetch(`/api/conf?pub=${encodeURIComponent(pub)}`, { headers: headers() });
+  if (res.status === 401) throw new Error('unauthorized');
+  if (!res.ok) throw new Error(await res.text());
+
+  const blob = await res.blob();
+  const cd = res.headers.get('Content-Disposition') || '';
+  const match = cd.match(/filename="?([^"]+)"?/);
+  const filename = match ? decodeURIComponent(match[1]) : 'client.conf';
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+async function showQr(pub) {
+  const res = await fetch(`/api/qr?pub=${encodeURIComponent(pub)}`, { headers: headers() });
+  if (res.status === 401) throw new Error('unauthorized');
+  if (!res.ok) throw new Error(await res.text());
+
+  const url = URL.createObjectURL(await res.blob());
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-backdrop';
+
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+
+  const title = document.createElement('h2');
+  title.textContent = 'QR код клиента';
+  const img = document.createElement('img');
+  img.className = 'qr-image';
+  img.alt = 'QR код WireGuard клиента';
+  img.src = url;
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'button button-danger';
+  close.textContent = 'Закрыть';
+  close.onclick = () => {
+    URL.revokeObjectURL(url);
+    overlay.remove();
+  };
+
+  modal.append(title, img, close);
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+}
+
+$list.addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-act]');
+  if (!button) return;
+
+  const { act, pub } = button.dataset;
+  try {
+    clearNotice();
+    if (act === 'delete' && !confirm('Удалить клиента?')) return;
+    if (act === 'conf') return await downloadConfig(pub);
+    if (act === 'qr') return await showQr(pub);
+
+    setBusy(button, true);
+    await api(`/api/${act}`, { method: 'POST', body: JSON.stringify({ pub }) });
+  } catch (error) {
+    if (error.message === 'unauthorized') return handleUnauthorized();
+    showNotice(`Ошибка: ${error.message}`);
+  } finally {
+    setBusy(button, false);
+  }
+});
+
+$addForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const name = ($name.value || '').trim();
+  if (!name) return showNotice('Введите имя клиента.');
+
+  setBusy($add, true, 'Добавить');
+  try {
+    await api('/api/add', { method: 'POST', body: JSON.stringify({ name }) });
+    $name.value = '';
+    clearNotice();
+  } catch (error) {
+    if (error.message === 'unauthorized') return handleUnauthorized();
+    showNotice(`Ошибка добавления: ${error.message}`);
+  } finally {
+    setBusy($add, false, 'Добавить');
+  }
+});
+
+$refresh.addEventListener('click', refresh);
+$restart.addEventListener('click', async () => {
+  if (!confirm('Перезапустить интерфейс WireGuard?')) return;
+  setBusy($restart, true, 'Перезапустить WG');
+  try {
+    await api('/api/restart', { method: 'POST' });
+    showNotice('WireGuard перезапущен.', 'success');
+  } catch (error) {
+    if (error.message === 'unauthorized') return handleUnauthorized();
+    showNotice(`Ошибка перезапуска: ${error.message}`);
+  } finally {
+    setBusy($restart, false, 'Перезапустить WG');
+  }
+});
+$search.addEventListener('input', () => render(peersCache));
+$logout.addEventListener('click', () => {
+  clearAuth();
+  peersCache = [];
+  render(peersCache);
+  $status.textContent = 'Статус появится после авторизации.';
+  showLogin();
+});
+
+function showLogin(message = '') {
+  if (loginOverlay) {
+    const existingError = loginOverlay.querySelector('.modal-error');
+    if (existingError && message) {
+      existingError.textContent = message;
+      existingError.hidden = false;
+    }
+    return;
+  }
+  socket.disconnect();
+
+  loginOverlay = document.createElement('div');
+  loginOverlay.className = 'modal-backdrop';
+
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  const title = document.createElement('h2');
+  title.textContent = 'Авторизация';
+
+  const form = document.createElement('form');
+  form.className = 'modal-form';
+
+  const error = document.createElement('div');
+  error.className = 'notice notice-error modal-error';
+  error.hidden = !message;
+  error.textContent = message;
+
+  const user = document.createElement('input');
+  user.className = 'input';
+  user.placeholder = 'Логин';
+  user.autocomplete = 'username';
+
+  const pass = document.createElement('input');
+  pass.className = 'input';
+  pass.type = 'password';
+  pass.placeholder = 'Пароль';
+  pass.autocomplete = 'current-password';
+
+  const submit = document.createElement('button');
+  submit.type = 'submit';
+  submit.className = 'button button-primary';
+  submit.textContent = 'Войти';
+
+  form.append(error, user, pass, submit);
+  modal.append(title, form);
+  loginOverlay.appendChild(modal);
+  document.body.appendChild(loginOverlay);
+  user.focus();
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const username = user.value.trim();
+    const password = pass.value;
+    if (!username || !password) {
+      error.textContent = 'Введите логин и пароль.';
+      error.hidden = false;
+      return;
+    }
+    setAuth(username, password);
+    loginOverlay.remove();
+    loginOverlay = null;
+    await refresh();
+  });
+}
+
+socket.on('status', (status) => {
+  $status.textContent = status.text || '';
+});
+socket.on('peers', (peers) => {
+  peersCache = peers;
+  render(peersCache);
+});
+socket.on('connect_error', (error) => {
+  if (error.message === 'unauthorized') return handleUnauthorized();
+  if (error.message === 'forbidden') showNotice('Доступ к live-обновлениям запрещён для текущего IP.');
+});
+
+const savedUser = sessionStorage.getItem('WG_USER');
+const savedPass = sessionStorage.getItem('WG_PASS');
 if (savedUser && savedPass) {
-    setAuth(savedUser, savedPass);
-    $refresh.click();
+  setAuth(savedUser, savedPass);
+  refresh();
 } else {
-    showLogin();
+  showLogin();
 }

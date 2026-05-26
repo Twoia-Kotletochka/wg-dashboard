@@ -9,6 +9,8 @@ fi
 WG_IF="${WG_IF:-wg0}"
 WG_NET="${WG_NET:-10.0.70.0/24}"
 WAN_IF="${WAN_IF:-$(ip route show default 2>/dev/null | awk '/default/ {print $5; exit}')}"
+MIN_NODE_MAJOR=18
+MIN_NODE_MINOR=18
 
 if [[ -z "${WAN_IF}" ]]; then
   echo "[!] Не удалось определить WAN интерфейс. Укажите вручную: WAN_IF=eth0 bash $0" >&2
@@ -21,11 +23,40 @@ apt-get update
 echo "[+] Установка пакетов: wireguard, qrencode, curl, git"
 apt-get install -y wireguard qrencode curl git
 
+check_node_version() {
+  local version major minor
+  version="$(node --version 2>/dev/null || true)"
+  version="${version#v}"
+  major="${version%%.*}"
+  minor="${version#*.}"
+  minor="${minor%%.*}"
+
+  if [[ -z "${major}" || -z "${minor}" ]]; then
+    return 1
+  fi
+
+  if (( major > MIN_NODE_MAJOR )); then
+    return 0
+  fi
+
+  if (( major == MIN_NODE_MAJOR && minor >= MIN_NODE_MINOR )); then
+    return 0
+  fi
+
+  return 1
+}
+
 if command -v node >/dev/null 2>&1; then
   echo "[+] Node.js уже установлен: $(node --version)"
 else
   echo "[+] Установка Node.js из системного репозитория"
   apt-get install -y nodejs
+fi
+
+if ! check_node_version; then
+  echo "[!] Требуется Node.js ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}+." >&2
+  echo "[!] Установите актуальный Node.js (например, из NodeSource) и повторите запуск." >&2
+  exit 1
 fi
 
 if command -v npm >/dev/null 2>&1; then
