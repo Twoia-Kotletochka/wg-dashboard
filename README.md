@@ -25,8 +25,10 @@
 
 - Linux-сервер с WireGuard.
 - Node.js версии `18.18.0` или новее.
+- `qrencode` для QR-кодов.
 - Доступ к серверу с правами `sudo` для установки WireGuard и настройки интерфейса.
 - Открытый UDP-порт WireGuard, обычно `51820`.
+- HTTPS или доступ только через приватную сеть/VPN для production.
 - Для локальной разработки WireGuard не обязателен, если использовать `AUTO_START_WG=false`.
 
 ## Установка на сервер
@@ -127,7 +129,7 @@ npm start
 http://<server-ip>:54763
 ```
 
-В production лучше запускать приложение через process manager.
+В production не открывайте панель по обычному HTTP в публичный интернет. Basic Auth передаёт логин и пароль в заголовке каждого запроса, поэтому перед приложением должен быть HTTPS reverse proxy или доступ должен быть ограничен приватной сетью/VPN.
 
 ## Деплой через pm2
 
@@ -145,6 +147,33 @@ git pull
 npm ci
 pm2 restart wg-dashboard
 ```
+
+`pm2 restart` перезапускает только веб-панель. Кнопка "Перезапустить WG" внутри панели выполняет `wg-quick down` и `wg-quick up`, поэтому временно обрывает активные WireGuard-соединения.
+
+## HTTPS через nginx
+
+Минимальный пример reverse proxy:
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name vpn.example.com;
+
+    ssl_certificate /etc/letsencrypt/live/vpn.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/vpn.example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:54763;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
+
+Если nginx находится перед панелью, добавьте IP reverse proxy или свою админскую сеть в `ALLOWED_IPS`, иначе middleware может вернуть `Forbidden`.
 
 ## Как пользоваться
 
@@ -189,6 +218,7 @@ src/auth.js               # Basic Auth helpers
 src/net.js                # IP/CIDR helpers и выбор следующего client IP
 src/storage.js            # работа с peers.json и client config files
 src/wireguard.js          # безопасная обёртка над wg, wg-quick и qrencode
+src/mutation-queue.js     # сериализация операций, меняющих peers.json и wg config
 public/index.html         # разметка веб-панели
 public/styles.css         # стили интерфейса
 public/app.js             # клиентская логика панели
@@ -197,6 +227,30 @@ scripts/check-js.js       # проверка синтаксиса JS-файло�
 scripts/smoke.js          # smoke test локального HTTP-сервера
 test/                     # unit-тесты
 ```
+
+## Формат `data/peers.json`
+
+Файл создаётся автоматически в `BASE_DIR/data/peers.json` и не хранится в git. Пример записи:
+
+```json
+{
+  "name": "admin-phone",
+  "ip": "10.0.70.2",
+  "pub": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+  "created": 1710000000000,
+  "blocked": false
+}
+```
+
+Поля:
+
+| Поле | Назначение |
+| --- | --- |
+| `name` | Имя клиента, используется также для имени `.conf` файла. |
+| `ip` | IP клиента внутри VPN-сети. |
+| `pub` | WireGuard public key клиента. |
+| `created` | Время создания в Unix timestamp milliseconds. |
+| `blocked` | Признак блокировки клиента в панели. |
 
 ## Частые ошибки
 
@@ -242,9 +296,10 @@ ALLOWED_IPS=203.0.113.10,192.168.1.0/24
 
 - Не коммитьте `.env`, `data/peers.json`, `data/clients/*.conf` и `.runtime/`.
 - Используйте сильный пароль в `ADMIN_PASS`.
-- Не открывайте панель на весь интернет без дополнительной сетевой защиты.
+- Не открывайте панель на весь интернет без HTTPS и дополнительной сетевой защиты.
 - Ограничивайте доступ через `ALLOWED_IPS`, VPN или firewall.
 - Клиентские `.conf` содержат приватные ключи, поэтому храните их как секреты.
+- Приложение добавляет базовые security headers: CSP, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`.
 
 ## Полезные команды
 

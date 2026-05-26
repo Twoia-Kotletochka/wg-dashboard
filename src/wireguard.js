@@ -9,6 +9,7 @@ const CLIENT_NAME_RE = /^[a-zA-Z0-9._-]{2,32}$/;
 
 const MARK_BEGIN = '# [WG-DASHBOARD BEGIN';
 const MARK_END = '# [WG-DASHBOARD END]';
+const ONLINE_THRESHOLD_SEC = 180;
 
 function runFile(command, args = [], options = {}) {
   return execFileSync(command, args, {
@@ -64,7 +65,7 @@ function parseDump(output, wgIf) {
       latest: latestTs > 0 ? `${delta}s ago` : 'no handshake',
       rx: Number(parts[5] || 0),
       tx: Number(parts[6] || 0),
-      online: latestTs > 0 && delta < 180,
+      online: latestTs > 0 && delta < ONLINE_THRESHOLD_SEC,
     });
   }
 
@@ -211,6 +212,7 @@ function createWireGuard(config) {
 }
 
 module.exports = {
+  ONLINE_THRESHOLD_SEC,
   createWireGuard,
   parseDump,
   updatePeerAllowedIp,

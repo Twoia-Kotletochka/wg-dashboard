@@ -48,7 +48,7 @@ async function main() {
       ADMIN_USER: 'test',
       ADMIN_PASS: 'test',
       WG_CONF: path.join(baseDir, 'wg0.conf'),
-      WG_SERVER_PUB: 'dummy',
+      WG_SERVER_PUB: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=',
       WG_ENDPOINT: '127.0.0.1:51820',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -60,7 +60,16 @@ async function main() {
 
   try {
     const baseUrl = `http://127.0.0.1:${port}`;
-    await waitFor(baseUrl);
+    const index = await waitFor(baseUrl);
+    if (index.headers.get('x-frame-options') !== 'DENY') {
+      throw new Error('Missing X-Frame-Options security header');
+    }
+    if (index.headers.get('x-content-type-options') !== 'nosniff') {
+      throw new Error('Missing X-Content-Type-Options security header');
+    }
+    if (!String(index.headers.get('content-security-policy') || '').includes("default-src 'self'")) {
+      throw new Error('Missing Content-Security-Policy security header');
+    }
 
     const unauthorized = await fetch(`${baseUrl}/api/peers`);
     if (unauthorized.status !== 401) throw new Error(`/api/peers without auth returned ${unauthorized.status}`);
@@ -70,6 +79,11 @@ async function main() {
     });
     const json = await peers.json();
     if (!Array.isArray(json)) throw new Error('/api/peers did not return an array');
+
+    const badConf = await fetch(`${baseUrl}/api/conf?pub=not-a-key`, {
+      headers: { Authorization: basic('test', 'test') },
+    });
+    if (badConf.status !== 400) throw new Error(`/api/conf bad pub returned ${badConf.status}`);
 
     const badPub = await fetch(`${baseUrl}/api/block`, {
       method: 'POST',

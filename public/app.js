@@ -17,15 +17,11 @@ let loginOverlay = null;
 
 function setAuth(user, pass) {
   authHeader = `Basic ${btoa(`${user}:${pass}`)}`;
-  sessionStorage.setItem('WG_USER', user);
-  sessionStorage.setItem('WG_PASS', pass);
   connectSocket();
 }
 
 function clearAuth() {
   authHeader = '';
-  sessionStorage.removeItem('WG_USER');
-  sessionStorage.removeItem('WG_PASS');
   socket.disconnect();
 }
 
@@ -90,10 +86,6 @@ function fmtRate(value) {
   return `${fmtBytes(value)}/s`;
 }
 
-function appendText(parent, value) {
-  parent.appendChild(document.createTextNode(value));
-}
-
 function createButton({ action, pub, label, variant = 'secondary', title }) {
   const button = document.createElement('button');
   button.type = 'button';
@@ -119,7 +111,7 @@ function createPeerCard(peer) {
   dot.className = peer.online ? 'status-dot status-dot-online' : 'status-dot';
   dot.title = peer.online ? 'Онлайн' : 'Оффлайн';
   title.appendChild(dot);
-  appendText(title, peer.name || 'unknown');
+  title.append(peer.name || 'unknown');
 
   const ip = document.createElement('span');
   ip.className = 'muted';
@@ -392,11 +384,4 @@ socket.on('connect_error', (error) => {
   if (error.message === 'forbidden') showNotice('Доступ к live-обновлениям запрещён для текущего IP.');
 });
 
-const savedUser = sessionStorage.getItem('WG_USER');
-const savedPass = sessionStorage.getItem('WG_PASS');
-if (savedUser && savedPass) {
-  setAuth(savedUser, savedPass);
-  refresh();
-} else {
-  showLogin();
-}
+showLogin();

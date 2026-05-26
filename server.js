@@ -7,6 +7,7 @@ const { Server } = require('socket.io');
 
 const { createAuthMiddleware, verifyBasicAuth } = require('./src/auth');
 const { loadConfig } = require('./src/config');
+const { createSerialQueue } = require('./src/mutation-queue');
 const { allowedIpMatches, normalizeIp, nextIpFromPeers, parseCidr } = require('./src/net');
 const { createStorage } = require('./src/storage');
 const { createWireGuard } = require('./src/wireguard');
@@ -20,6 +21,20 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 const requireAuth = createAuthMiddleware(config);
+const runMutation = createSerialQueue();
+
+function assertClientConfigReady() {
+  if (!config.wgEndpoint) throw new Error('WG_ENDPOINT is required');
+  try {
+    wg.assertPublicKey(config.wgServerPub);
+  } catch {
+    throw new Error('WG_SERVER_PUB must be a valid WireGuard public key');
+  }
+}
+
+if (config.autoStartWg) {
+  assertClientConfigReady();
+}
 
 function requestIp(req) {
   return normalizeIp(req.socket?.remoteAddress || req.ip || '');
@@ -45,7 +60,6 @@ function apiError(res, status, error, detail) {
 }
 
 function peerByPublicKey(pub) {
-  wg.assertPublicKey(pub);
   return storage.loadPeers().find((peer) => peer.pub === pub);
 }
 
@@ -68,6 +82,7 @@ function peersWithStats() {
 }
 
 function buildClientConfig({ privateKey, ip, presharedKey }) {
+  assertClientConfigReady();
   return `[Interface]
 PrivateKey = ${privateKey}
 Address = ${ip}/${wgNet.prefix}
@@ -81,6 +96,48 @@ Endpoint = ${config.wgEndpoint}
 `;
 }
 
+function securityHeaders(_req, res, next) {
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader(
+    'Content-Security-Policy',
+    [
+      "default-src 'self'",
+      "base-uri 'self'",
+      "connect-src 'self' ws: wss:",
+      "form-action 'self'",
+      "frame-ancestors 'none'",
+      "img-src 'self' blob: data:",
+      "object-src 'none'",
+      "script-src 'self'",
+      "style-src 'self'",
+    ].join('; ')
+  );
+  next();
+}
+
+function mutate(res, error, fn) {
+  return runMutation(fn).catch((caught) => (
+    apiError(res, 500, error, String(caught.message || caught))
+  ));
+}
+
+function safeBroadcast(delayMs = 0) {
+  const send = () => {
+    try {
+      broadcast();
+    } catch (error) {
+      console.error('Broadcast failed:', error.message || error);
+    }
+  };
+
+  if (delayMs > 0) setTimeout(send, delayMs);
+  else send();
+}
+
+app.use(securityHeaders);
 app.use(requireAllowedIp);
 app.use(express.json({ limit: '64kb' }));
 app.use(express.static(config.publicDir));
@@ -101,51 +158,54 @@ app.post('/api/add', requireAuth, (req, res) => {
     return apiError(res, 400, 'bad_name');
   }
 
-  const peers = storage.loadPeers();
-  if (peers.some((peer) => peer.name === name)) return apiError(res, 400, 'exists');
+  return mutate(res, 'add_failed', () => {
+    assertClientConfigReady();
+    const peers = storage.loadPeers();
+    if (peers.some((peer) => peer.name === name)) return apiError(res, 400, 'exists');
 
-  let pub = '';
-  let runtimeAdded = false;
-  let peerBlockAdded = false;
-  let configPath = '';
-  try {
-    const privateKey = wg.generatePrivateKey();
-    pub = wg.derivePublicKey(privateKey);
-    const ip = nextIpFromPeers(config.wgNet, peers);
-    const presharedKey = wg.generatePresharedKey();
+    let pub = '';
+    let runtimeAdded = false;
+    let peerBlockAdded = false;
+    let configPath = '';
+    try {
+      const privateKey = wg.generatePrivateKey();
+      pub = wg.derivePublicKey(privateKey);
+      const ip = nextIpFromPeers(config.wgNet, peers);
+      const presharedKey = wg.generatePresharedKey();
 
-    wg.addPeerRuntime({ pub, psk: presharedKey, ip });
-    runtimeAdded = true;
-    wg.appendPeerBlock({ name, pub, ip, psk: presharedKey });
-    peerBlockAdded = true;
-    configPath = storage.clientConfigPath(name);
+      wg.addPeerRuntime({ pub, psk: presharedKey, ip });
+      runtimeAdded = true;
+      wg.appendPeerBlock({ name, pub, ip, psk: presharedKey });
+      peerBlockAdded = true;
+      configPath = storage.clientConfigPath(name);
 
-    fs.writeFileSync(
-      configPath,
-      buildClientConfig({ privateKey, ip, presharedKey }),
-      { mode: 0o600 }
-    );
+      fs.writeFileSync(
+        configPath,
+        buildClientConfig({ privateKey, ip, presharedKey }),
+        { mode: 0o600 }
+      );
 
-    const peer = { name, ip, pub, created: Date.now(), blocked: false };
-    storage.savePeers([...peers, peer]);
-    res.json({ ok: true, peer });
-    broadcast();
-  } catch (error) {
-    if (runtimeAdded && pub) {
-      try { wg.removePeer(pub); } catch { /* best-effort rollback */ }
+      const peer = { name, ip, pub, created: Date.now(), blocked: false };
+      storage.savePeers([...peers, peer]);
+      res.json({ ok: true, peer });
+      safeBroadcast();
+    } catch (error) {
+      if (runtimeAdded && pub) {
+        try { wg.removePeer(pub); } catch { /* best-effort rollback */ }
+      }
+      if (peerBlockAdded && pub) {
+        try { wg.removePeerBlock(pub); } catch { /* best-effort rollback */ }
+      }
+      if (configPath) fs.rmSync(configPath, { force: true });
+      return apiError(res, 500, 'add_failed', String(error.message || error));
     }
-    if (peerBlockAdded && pub) {
-      try { wg.removePeerBlock(pub); } catch { /* best-effort rollback */ }
-    }
-    if (configPath) fs.rmSync(configPath, { force: true });
-    return apiError(res, 500, 'add_failed', String(error.message || error));
-  }
+  });
 });
 
 app.post('/api/block', requireAuth, (req, res) => {
   const pub = String(req.body?.pub || '').trim();
   if (!isPublicKey(pub)) return apiError(res, 400, 'bad_pub');
-  try {
+  return mutate(res, 'block_failed', () => {
     const peers = storage.loadPeers();
     const peer = peers.find((item) => item.pub === pub);
     if (!peer) return apiError(res, 404, 'not_found');
@@ -155,16 +215,14 @@ app.post('/api/block', requireAuth, (req, res) => {
     peer.blocked = true;
     storage.savePeers(peers);
     res.json({ ok: true });
-    broadcast();
-  } catch (error) {
-    return apiError(res, 500, 'block_failed', String(error.message || error));
-  }
+    safeBroadcast();
+  });
 });
 
 app.post('/api/unblock', requireAuth, (req, res) => {
   const pub = String(req.body?.pub || '').trim();
   if (!isPublicKey(pub)) return apiError(res, 400, 'bad_pub');
-  try {
+  return mutate(res, 'unblock_failed', () => {
     const peers = storage.loadPeers();
     const peer = peers.find((item) => item.pub === pub);
     if (!peer) return apiError(res, 404, 'not_found');
@@ -174,16 +232,14 @@ app.post('/api/unblock', requireAuth, (req, res) => {
     peer.blocked = false;
     storage.savePeers(peers);
     res.json({ ok: true });
-    broadcast();
-  } catch (error) {
-    return apiError(res, 500, 'unblock_failed', String(error.message || error));
-  }
+    safeBroadcast();
+  });
 });
 
 app.post('/api/delete', requireAuth, (req, res) => {
   const pub = String(req.body?.pub || '').trim();
   if (!isPublicKey(pub)) return apiError(res, 400, 'bad_pub');
-  try {
+  return mutate(res, 'delete_failed', () => {
     const peers = storage.loadPeers();
     const peer = peers.find((item) => item.pub === pub);
     if (!peer) return apiError(res, 404, 'not_found');
@@ -194,21 +250,14 @@ app.post('/api/delete', requireAuth, (req, res) => {
       console.warn('WireGuard runtime peer remove failed:', error.message);
     }
 
+    wg.removePeerBlock(pub);
+
     const configPath = storage.clientConfigPath(peer.name);
     fs.rmSync(configPath, { force: true });
     storage.savePeers(peers.filter((item) => item.pub !== pub));
-
-    try {
-      wg.removePeerBlock(pub);
-    } catch (error) {
-      console.error('Ошибка при очистке wg config:', error.message);
-    }
-
     res.json({ ok: true });
-    broadcast();
-  } catch (error) {
-    return apiError(res, 500, 'delete_failed', String(error.message || error));
-  }
+    safeBroadcast();
+  });
 });
 
 app.get('/api/qr', requireAuth, (req, res) => {
@@ -253,13 +302,11 @@ app.get('/api/conf', requireAuth, (req, res) => {
 });
 
 app.post('/api/restart', requireAuth, (_req, res) => {
-  try {
+  return mutate(res, 'restart_failed', () => {
     const out = wg.restart();
     res.json({ ok: true, out });
-    setTimeout(broadcast, 500);
-  } catch (error) {
-    return apiError(res, 500, 'restart_failed', String(error.message || error));
-  }
+    safeBroadcast(500);
+  });
 });
 
 app.use((error, _req, res, next) => {
@@ -313,7 +360,7 @@ io.on('connection', (socket) => {
 });
 
 setInterval(() => {
-  if (io.engine.clientsCount > 0) broadcast();
+  if (io.engine.clientsCount > 0) safeBroadcast();
 }, 5000);
 wg.ensureStarted();
 
