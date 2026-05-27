@@ -15,6 +15,8 @@ const $list = document.getElementById('list');
 const $addForm = document.getElementById('add-form');
 const $add = document.getElementById('add');
 const $name = document.getElementById('name');
+const $trafficLimitEnabled = document.getElementById('traffic-limit-enabled');
+const $trafficLimitValue = document.getElementById('traffic-limit-value');
 const $refresh = document.getElementById('refresh');
 const $restart = document.getElementById('restart');
 const $search = document.getElementById('search');
@@ -99,6 +101,45 @@ function fmtRate(value) {
   return `${fmtBytes(value)}/s`;
 }
 
+function fmtPercent(value) {
+  if (value === null || value === undefined) return '';
+  return `${Number(value).toFixed(value >= 10 ? 0 : 1)}%`;
+}
+
+function parseTrafficLimit(value) {
+  const raw = String(value || '').trim().replace(',', '.');
+  if (!raw) throw new Error('Введите лимит трафика.');
+
+  const match = raw.match(/^(\d+(?:\.\d+)?)\s*(b|bytes?|kb|kib|mb|mib|gb|gib|tb|tib)?$/i);
+  if (!match) throw new Error('Укажите лимит, например 10 GB или 2048 MB.');
+
+  const amount = Number(match[1]);
+  const unit = String(match[2] || 'gb').toLowerCase();
+  const multipliers = {
+    b: 1,
+    byte: 1,
+    bytes: 1,
+    kb: 1024,
+    kib: 1024,
+    mb: 1024 ** 2,
+    mib: 1024 ** 2,
+    gb: 1024 ** 3,
+    gib: 1024 ** 3,
+    tb: 1024 ** 4,
+    tib: 1024 ** 4,
+  };
+  const bytes = Math.floor(amount * (multipliers[unit] || multipliers.gb));
+  if (!Number.isSafeInteger(bytes) || bytes <= 0) throw new Error('Лимит должен быть больше нуля.');
+  return bytes;
+}
+
+function trafficLimitPayload(enabled, value) {
+  return {
+    traffic_limit_enabled: Boolean(enabled),
+    traffic_limit_bytes: enabled ? parseTrafficLimit(value) : 0,
+  };
+}
+
 function createButton({ action, pub, label, variant = 'secondary', title }) {
   const button = document.createElement('button');
   button.type = 'button';
@@ -132,8 +173,16 @@ function createPeerCard(peer) {
   title.appendChild(ip);
 
   const badge = document.createElement('span');
-  badge.className = peer.blocked ? 'badge badge-blocked' : 'badge badge-active';
-  badge.textContent = peer.blocked ? 'blocked' : 'active';
+  if (peer.traffic_blocked) {
+    badge.className = 'badge badge-limit';
+    badge.textContent = 'лимит исчерпан';
+  } else if (peer.blocked) {
+    badge.className = 'badge badge-blocked';
+    badge.textContent = 'blocked';
+  } else {
+    badge.className = 'badge badge-active';
+    badge.textContent = 'active';
+  }
   title.appendChild(badge);
 
   const meta = document.createElement('div');
@@ -148,10 +197,45 @@ function createPeerCard(peer) {
   main.appendChild(title);
   main.appendChild(meta);
 
+  const traffic = document.createElement('div');
+  traffic.className = 'traffic-info';
+  const used = Number(peer.traffic_used_bytes || 0);
+  const limitEnabled = Boolean(peer.traffic_limit_enabled);
+  const limit = Number(peer.traffic_limit_bytes || 0);
+  const percent = limitEnabled && limit > 0 ? Math.min(100, (used / limit) * 100) : null;
+  const trafficLine = document.createElement('div');
+  trafficLine.className = 'traffic-line';
+  trafficLine.textContent = limitEnabled
+    ? `Трафик: ${fmtBytes(used)} / ${fmtBytes(limit)} (${fmtPercent(percent)})`
+    : `Трафик: ${fmtBytes(used)} / без лимита`;
+  traffic.appendChild(trafficLine);
+  if (limitEnabled) {
+    const bar = document.createElement('div');
+    bar.className = 'traffic-bar';
+    const fill = document.createElement('div');
+    fill.className = 'traffic-bar-fill';
+    if (percent >= 100) fill.classList.add('is-danger');
+    else if (percent >= 80) fill.classList.add('is-warning');
+    fill.style.width = `${Math.min(100, percent)}%`;
+    bar.appendChild(fill);
+    traffic.appendChild(bar);
+  }
+  main.appendChild(traffic);
+
   const actions = document.createElement('div');
   actions.className = 'row-actions';
   actions.appendChild(createButton({ action: 'conf', pub: peer.pub, label: 'Conf', title: 'Скачать конфиг' }));
   actions.appendChild(createButton({ action: 'qr', pub: peer.pub, label: 'QR', title: 'Показать QR' }));
+  actions.appendChild(createButton({ action: 'traffic-limit', pub: peer.pub, label: 'Лимит', title: 'Изменить лимит трафика' }));
+  actions.appendChild(createButton({ action: 'traffic-reset', pub: peer.pub, label: 'Сбросить трафик', title: 'Сбросить учёт трафика' }));
+  if (peer.traffic_blocked) {
+    actions.appendChild(createButton({
+      action: 'traffic-unblock',
+      pub: peer.pub,
+      label: 'Разблокировать лимит',
+      variant: 'primary',
+    }));
+  }
   actions.appendChild(peer.blocked
     ? createButton({ action: 'unblock', pub: peer.pub, label: 'Разблокировать', variant: 'primary' })
     : createButton({ action: 'block', pub: peer.pub, label: 'Блокировать', variant: 'warning' }));
@@ -271,6 +355,79 @@ async function showQr(pub) {
   document.body.appendChild(overlay);
 }
 
+function showTrafficLimitDialog(peer) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-backdrop';
+
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+
+  const title = document.createElement('h2');
+  title.textContent = `Лимит: ${peer.name || peer.ip}`;
+
+  const form = document.createElement('form');
+  form.className = 'modal-form';
+
+  const error = document.createElement('div');
+  error.className = 'notice notice-error modal-error';
+  error.hidden = true;
+
+  const enabledLabel = document.createElement('label');
+  enabledLabel.className = 'check-row';
+  const enabled = document.createElement('input');
+  enabled.type = 'checkbox';
+  enabled.checked = Boolean(peer.traffic_limit_enabled);
+  const enabledText = document.createElement('span');
+  enabledText.textContent = 'Включить лимит трафика';
+  enabledLabel.append(enabled, enabledText);
+
+  const limit = document.createElement('input');
+  limit.className = 'input';
+  limit.placeholder = '10 GB или 2048 MB';
+  limit.value = peer.traffic_limit_enabled && peer.traffic_limit_bytes
+    ? fmtBytes(peer.traffic_limit_bytes)
+    : '';
+
+  const used = document.createElement('div');
+  used.className = 'traffic-line';
+  used.textContent = `Использовано сейчас: ${fmtBytes(peer.traffic_used_bytes)}`;
+
+  const actions = document.createElement('div');
+  actions.className = 'row-actions';
+  const save = document.createElement('button');
+  save.type = 'submit';
+  save.className = 'button button-primary';
+  save.textContent = 'Сохранить';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'button button-secondary';
+  cancel.textContent = 'Отмена';
+  cancel.onclick = () => overlay.remove();
+  actions.append(save, cancel);
+
+  form.append(error, enabledLabel, limit, used, actions);
+  modal.append(title, form);
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+  limit.focus();
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try {
+      const payload = trafficLimitPayload(enabled.checked, limit.value);
+      await api('/api/traffic/limit', {
+        method: 'POST',
+        body: JSON.stringify({ pub: peer.pub, ...payload }),
+      });
+      overlay.remove();
+      await refresh();
+    } catch (caught) {
+      error.textContent = caught.message;
+      error.hidden = false;
+    }
+  });
+}
+
 $list.addEventListener('click', async (event) => {
   const button = event.target.closest('button[data-act]');
   if (!button) return;
@@ -281,9 +438,19 @@ $list.addEventListener('click', async (event) => {
     if (act === 'delete' && !confirm('Удалить клиента?')) return;
     if (act === 'conf') return await downloadConfig(pub);
     if (act === 'qr') return await showQr(pub);
+    if (act === 'traffic-limit') {
+      const peer = peersCache.find((item) => item.pub === pub);
+      if (peer) showTrafficLimitDialog(peer);
+      return;
+    }
+    if (act === 'traffic-reset' && !confirm('Сбросить учёт трафика клиента?')) return;
 
     setBusy(button, true);
-    await api(`/api/${act}`, { method: 'POST', body: JSON.stringify({ pub }) });
+    const endpoint = act.startsWith('traffic-')
+      ? `/api/traffic/${act.replace('traffic-', '')}`
+      : `/api/${act}`;
+    await api(endpoint, { method: 'POST', body: JSON.stringify({ pub }) });
+    await refresh();
   } catch (error) {
     if (error.message === 'unauthorized') return handleUnauthorized();
     showNotice(`Ошибка: ${error.message}`);
@@ -299,8 +466,11 @@ $addForm.addEventListener('submit', async (event) => {
 
   setBusy($add, true, 'Добавить');
   try {
-    await api('/api/add', { method: 'POST', body: JSON.stringify({ name }) });
+    const trafficLimit = trafficLimitPayload($trafficLimitEnabled.checked, $trafficLimitValue.value);
+    await api('/api/add', { method: 'POST', body: JSON.stringify({ name, ...trafficLimit }) });
     $name.value = '';
+    $trafficLimitEnabled.checked = false;
+    $trafficLimitValue.value = '';
     clearNotice();
   } catch (error) {
     if (error.message === 'unauthorized') return handleUnauthorized();

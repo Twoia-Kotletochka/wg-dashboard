@@ -38,6 +38,17 @@
           <span>Имя клиента</span>
           <input id="name" class="input" placeholder="например, admin-phone" autocomplete="off" />
         </label>
+        <div class="field checkbox-field">
+          <span>Лимит</span>
+          <label class="check-row">
+            <input id="traffic-limit-enabled" type="checkbox" />
+            <span>Включить лимит</span>
+          </label>
+        </div>
+        <label class="field">
+          <span>Объём</span>
+          <input id="traffic-limit-value" class="input" placeholder="10 GB или 2048 MB" autocomplete="off" />
+        </label>
         <button id="add" class="button button-primary" type="submit">Добавить</button>
       </form>
     </section>

@@ -38,6 +38,20 @@ async function waitFor(url, options = {}) {
 async function main() {
   const port = await freePort();
   const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wg-dashboard-smoke-'));
+  const fakePub = `${'b'.repeat(43)}=`;
+  const dataDir = path.join(baseDir, 'data');
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dataDir, 'peers.json'),
+    `${JSON.stringify([{
+      name: 'smoke-peer',
+      ip: '10.0.70.2',
+      pub: fakePub,
+      created: Date.now(),
+      blocked: false,
+    }], null, 2)}\n`
+  );
+
   const child = spawn(process.execPath, ['server.js'], {
     cwd: path.resolve(__dirname, '..'),
     env: {
@@ -85,6 +99,8 @@ async function main() {
 
     const json = await peers.json();
     if (!Array.isArray(json)) throw new Error('/api/peers did not return an array');
+    if (json.length !== 1) throw new Error('/api/peers did not return seeded peer');
+    if (json[0].traffic_limit_enabled !== false) throw new Error('/api/peers did not migrate traffic fields');
 
     const statusWithCookie = await waitFor(`${baseUrl}/api/status`, {
       headers: { Cookie: sessionCookie },
@@ -96,6 +112,51 @@ async function main() {
       headers: { Authorization: basic('test', 'test') },
     });
     if (badConf.status !== 400) throw new Error(`/api/conf bad pub returned ${badConf.status}`);
+
+    const traffic = await waitFor(`${baseUrl}/api/traffic?pub=${encodeURIComponent(fakePub)}`, {
+      headers: { Authorization: basic('test', 'test') },
+    });
+    const trafficJson = await traffic.json();
+    if (trafficJson.traffic_used_bytes !== 0) throw new Error('/api/traffic returned unexpected used bytes');
+
+    const limitBytes = 10 * 1024 * 1024 * 1024;
+    const limitUpdate = await fetch(`${baseUrl}/api/traffic/limit`, {
+      method: 'POST',
+      headers: {
+        Authorization: basic('test', 'test'),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        pub: fakePub,
+        traffic_limit_enabled: true,
+        traffic_limit_bytes: limitBytes,
+      }),
+    });
+    if (!limitUpdate.ok) throw new Error(`/api/traffic/limit returned ${limitUpdate.status}`);
+    const limitJson = await limitUpdate.json();
+    if (limitJson.peer.traffic_limit_bytes !== limitBytes) {
+      throw new Error('/api/traffic/limit did not persist limit bytes');
+    }
+
+    const resetTraffic = await fetch(`${baseUrl}/api/traffic/reset`, {
+      method: 'POST',
+      headers: {
+        Authorization: basic('test', 'test'),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ pub: fakePub }),
+    });
+    if (!resetTraffic.ok) throw new Error(`/api/traffic/reset returned ${resetTraffic.status}`);
+
+    const unblockTraffic = await fetch(`${baseUrl}/api/traffic/unblock`, {
+      method: 'POST',
+      headers: {
+        Authorization: basic('test', 'test'),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ pub: fakePub }),
+    });
+    if (!unblockTraffic.ok) throw new Error(`/api/traffic/unblock returned ${unblockTraffic.status}`);
 
     const badPub = await fetch(`${baseUrl}/api/block`, {
       method: 'POST',
