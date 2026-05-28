@@ -134,12 +134,14 @@ input {
 }
 
 .button {
-  min-height: 40px;
+  min-height: 32px;
   border: 0;
   border-radius: 6px;
   color: #fff;
   cursor: pointer;
-  padding: 8px 12px;
+  padding: 4px 10px;
+  font-size: 14px;
+  line-height: 1.2;
   transition: background 120ms ease, opacity 120ms ease;
   white-space: nowrap;
 }
@@ -196,8 +198,19 @@ input {
 .client-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   gap: 12px;
   padding: 14px;
+}
+
+.row-actions {
+  align-items: center;
+  align-content: center;
+  justify-content: flex-end;
+}
+
+.row-actions .button {
+  flex: 0 0 auto;
 }
 
 .client-main {
@@ -363,9 +376,12 @@ input {
     flex-direction: column;
   }
 
-  .topbar-actions .button,
-  .row-actions .button {
+  .topbar-actions .button {
     flex: 1 1 auto;
+  }
+
+  .row-actions {
+    justify-content: center;
   }
 
   .add-form .button {
